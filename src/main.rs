@@ -1,3 +1,7 @@
+// A window program on Windows: no console flashes up on a double click. `console::attach`
+// borrows the terminal it was started from when there is something to print.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 mod gui;
 mod i18n;
 mod link;
@@ -41,25 +45,61 @@ fn main() -> ExitCode {
         println!("\n{}", text(lang, Msg::PressEnter));
         let _ = std::io::stdin().read_line(&mut String::new());
     }
+    console::restore();
     code
 }
 
 fn run() -> ExitCode {
+    let args = parse_args();
+    let lang = args.as_ref().ok().and_then(|a| a.lang).unwrap_or_else(i18n::detect);
+    let cards = net::list();
+    let hostname = net::hostname();
+
+    // The window, unless the terminal was asked for. A `--card` that can't be used goes to the
+    // terminal, which says why.
+    if let Ok(args) = &args {
+        if !args.text && !args.list_only && !args.help {
+            let chosen = match &args.card {
+                Some(name) => cards.iter().position(|c| &c.name == name).filter(|&i| cards[i].usable()),
+                None => net::suggest(&cards),
+            };
+            match chosen {
+                Some(chosen) => {
+                    let mut view = ui::View { lang, cards: &cards, chosen, hostname: hostname.as_deref() };
+                    match gui::run(&mut view) {
+                        Ok(()) => return ExitCode::SUCCESS,
+                        // No display, or none we can use: the terminal still works.
+                        Err(e) if std::env::var_os("WOLE_LINK_DEBUG").is_some() => {
+                            console::attach();
+                            eprintln!("window: {e}");
+                        }
+                        Err(_) => {}
+                    }
+                }
+                // Opened with a double click on Windows there's no terminal to tell this to.
+                None if args.card.is_none() => {
+                    if gui::message(&text(lang, Msg::NoCard)).is_ok() {
+                        return ExitCode::FAILURE;
+                    }
+                }
+                None => {}
+            }
+        }
+    }
+
+    console::attach();
     let ansi = std::io::stdout().is_terminal() && console::enable_ansi();
-    let args = match parse_args() {
+    let args = match args {
         Ok(args) => args,
         Err(bad) => {
-            eprintln!("{bad}?\n\n{}", text(i18n::detect(), Msg::Usage));
+            eprintln!("{bad}?\n\n{}", text(lang, Msg::Usage));
             return ExitCode::from(2);
         }
     };
-    let lang = args.lang.unwrap_or_else(i18n::detect);
     if args.help {
         println!("{}", text(lang, Msg::Usage));
         return ExitCode::SUCCESS;
     }
-
-    let cards = net::list();
     let chosen = match &args.card {
         Some(name) => match cards.iter().position(|c| &c.name == name) {
             None => {
@@ -79,18 +119,6 @@ fn run() -> ExitCode {
         },
         None => net::suggest(&cards),
     };
-    let hostname = net::hostname();
-    if !args.text && !args.list_only {
-        if let Some(chosen) = chosen {
-            let mut view = ui::View { lang, cards: &cards, chosen, hostname: hostname.as_deref() };
-            match gui::run(&mut view) {
-                Ok(()) => return ExitCode::SUCCESS,
-                // No display, or none we can use: the terminal still works.
-                Err(e) if std::env::var_os("WOLE_LINK_DEBUG").is_some() => eprintln!("window: {e}"),
-                Err(_) => {}
-            }
-        }
-    }
     print_cards(lang, &cards, chosen, args.list_only);
     if args.list_only {
         return ExitCode::SUCCESS;
@@ -150,6 +178,8 @@ fn print_cards(lang: Lang, cards: &[Card], chosen: Option<usize>, all: bool) {
 
 #[cfg(unix)]
 mod console {
+    pub fn attach() {}
+
     pub fn enable_ansi() -> bool {
         std::env::var_os("NO_COLOR").is_none()
     }
@@ -157,30 +187,94 @@ mod console {
     pub fn owns_window() -> bool {
         false
     }
+
+    pub fn restore() {}
 }
 
 #[cfg(windows)]
 mod console {
-    use windows_sys::Win32::System::Console::{
-        GetConsoleMode, GetConsoleProcessList, GetStdHandle, SetConsoleMode, SetConsoleOutputCP,
-        ENABLE_VIRTUAL_TERMINAL_PROCESSING, STD_OUTPUT_HANDLE,
+    use std::ptr::null;
+    use std::sync::Mutex;
+    use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     };
+    use windows_sys::Win32::System::Console::{
+        AllocConsole, AttachConsole, GetConsoleMode, GetConsoleOutputCP, GetConsoleProcessList,
+        GetStdHandle, SetConsoleMode, SetConsoleOutputCP, SetStdHandle, ATTACH_PARENT_PROCESS,
+        ENABLE_VIRTUAL_TERMINAL_PROCESSING, STD_ERROR_HANDLE, STD_HANDLE, STD_INPUT_HANDLE,
+        STD_OUTPUT_HANDLE,
+    };
+
+    /// The code page and output mode found in a borrowed console, put back on exit.
+    static SAVED: Mutex<Option<(u32, u32)>> = Mutex::new(None);
+
+    /// Borrows the console of the `cmd` or PowerShell we were started from, or opens one (a
+    /// double click that ended up with nothing to show in the window). Handles that already
+    /// point somewhere, like `--list > cards.txt`, are kept.
+    pub fn attach() {
+        // SAFETY: console and handle calls on this process's own standard handles.
+        unsafe {
+            let unset = |which: STD_HANDLE| {
+                let h = GetStdHandle(which);
+                h.is_null() || h == INVALID_HANDLE_VALUE
+            };
+            let (out, err, inp) = (unset(STD_OUTPUT_HANDLE), unset(STD_ERROR_HANDLE), unset(STD_INPUT_HANDLE));
+            if AttachConsole(ATTACH_PARENT_PROCESS) == 0 {
+                AllocConsole();
+            }
+            let open = |name: &str, access: u32| {
+                let wide: Vec<u16> = name.encode_utf16().chain([0]).collect();
+                CreateFileW(
+                    wide.as_ptr(),
+                    access,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    null(),
+                    OPEN_EXISTING,
+                    0,
+                    std::ptr::null_mut(),
+                )
+            };
+            if out {
+                SetStdHandle(STD_OUTPUT_HANDLE, open("CONOUT$", GENERIC_READ | GENERIC_WRITE));
+            }
+            if err {
+                SetStdHandle(STD_ERROR_HANDLE, open("CONOUT$", GENERIC_READ | GENERIC_WRITE));
+            }
+            if inp {
+                SetStdHandle(STD_INPUT_HANDLE, open("CONIN$", GENERIC_READ | GENERIC_WRITE));
+            }
+        }
+    }
 
     /// UTF-8 output for the blocks and accents, and escape codes for the colors.
     pub fn enable_ansi() -> bool {
         // SAFETY: plain console calls on this process's own standard output.
         unsafe {
-            SetConsoleOutputCP(65001);
             let handle = GetStdHandle(STD_OUTPUT_HANDLE);
             let mut mode = 0;
-            GetConsoleMode(handle, &mut mode) != 0
-                && SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0
+            if GetConsoleMode(handle, &mut mode) == 0 {
+                return false;
+            }
+            *SAVED.lock().unwrap() = Some((GetConsoleOutputCP(), mode));
+            SetConsoleOutputCP(65001);
+            SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0
                 && std::env::var_os("NO_COLOR").is_none()
         }
     }
 
-    /// Started by a double click in Explorer: the console window is ours alone and would close
-    /// with the QR the moment we exit.
+    /// Leaves the user's console as we found it.
+    pub fn restore() {
+        if let Some((code_page, mode)) = SAVED.lock().unwrap().take() {
+            // SAFETY: as in `enable_ansi`.
+            unsafe {
+                SetConsoleOutputCP(code_page);
+                SetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), mode);
+            }
+        }
+    }
+
+    /// The console was opened for us (a double click): it closes, text and all, when we exit.
     pub fn owns_window() -> bool {
         let mut ids = [0u32; 2];
         // SAFETY: the count passed is the array's length.

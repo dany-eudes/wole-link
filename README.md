@@ -31,7 +31,9 @@ wole-link --list          # every card, virtual ones included
 wole-link --lang pt-BR    # en, pt-BR, pt-PT or es; default: the system's language
 ```
 
-The window is on Linux for now; Windows still prints the QR in the console.
+On Windows, `wole-link.exe` is a window program: a double click opens only the window. Started
+from `cmd` or PowerShell with `--text` or `--list`, it writes to that console, but the prompt
+comes back before the output (Windows doesn't wait for window programs).
 
 ## Link format (v1)
 
@@ -61,6 +63,7 @@ Everything runs in Docker; nothing to install on the host besides Docker and `ma
 make test      # unit tests
 make linux     # target/x86_64-unknown-linux-musl/release/wole-link (static)
 make windows   # target/x86_64-pc-windows-gnu/release/wole-link.exe (for testing in a VM)
+make windows32 # 32-bit build, only for testing on a 32-bit VM (Windows 10 or later)
 make png       # the window in each language, as target/ui-*.png
 ```
 

@@ -12,7 +12,12 @@ linux:
 windows:
 	$(RUN) cargo build --release --target x86_64-pc-windows-gnu
 
-.PHONY: test linux windows png
+.PHONY: test linux windows windows32 png
+
+## 32-bit Windows binary, only for testing on a 32-bit VM:
+## target/i686-pc-windows-gnu/release/wole-link.exe
+windows32:
+	$(RUN) cargo build --release --target i686-pc-windows-gnu
 
 ## The window in each language, as target/ui-*.png
 png:

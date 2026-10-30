@@ -5,7 +5,7 @@ use qrcodegen::{QrCode, QrCodeEcc};
 /// Light margin around the code, in modules. The QR spec asks for 4.
 const QUIET: i32 = 4;
 
-/// With `ansi`, the code is painted black on white, whatever the terminal's theme (phone
+/// With `ansi`, the code is painted black on bright white, whatever the terminal's theme (phone
 /// scanners often miss a light-on-dark code). Without it, dark modules are drawn as blocks and
 /// the background is assumed light.
 pub fn render(text: &str, ansi: bool) -> String {
@@ -16,7 +16,8 @@ pub fn render(text: &str, ansi: bool) -> String {
     let mut y = -QUIET;
     while y < size + QUIET {
         if ansi {
-            out.push_str("\x1b[30;47m");
+            // 107: bright white; plain white (47) is light grey in Windows Terminal and many themes.
+            out.push_str("\x1b[30;107m");
         }
         for x in -QUIET..size + QUIET {
             out.push(match (dark(x, y), dark(x, y + 1)) {

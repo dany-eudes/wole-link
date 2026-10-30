@@ -70,7 +70,13 @@ make windows32 # 32-bit build, only for testing on a 32-bit VM (Windows 10 or la
 make png       # the window in each language, as target/ui-*.png
 ```
 
+## Icon
+
+The WOL•E app's icon with its second bar ending in a QR finder pattern. `python3 tools/icons.py`
+draws every size from the app's own curves (16 and 32 px on the pixel grid) and writes the
+Windows `.ico` and the X11 icon in `assets/icon/`.
+
 ## License
 
-[MIT](LICENSE). The embedded font is Noto Sans, subset to the Latin characters the four
+[MIT](LICENSE), © 2026 @celeraman. The embedded font is Noto Sans, subset to the Latin characters the four
 languages use, under the [SIL Open Font License 1.1](assets/fonts/OFL.txt).

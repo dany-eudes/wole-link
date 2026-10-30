@@ -19,12 +19,14 @@ use windows_sys::Win32::UI::HiDpi::{
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::VK_ESCAPE;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    GetMessageW, GetSystemMetrics, LoadCursorW, MessageBoxW, PostQuitMessage, RegisterClassW,
+    GetMessageW, GetSystemMetrics, LoadCursorW, LoadIconW, LoadImageW, MessageBoxW, SendMessageW,
+    ICON_SMALL, IMAGE_ICON, LR_DEFAULTCOLOR, SM_CXSMICON, SM_CYSMICON, WM_SETICON, PostQuitMessage, RegisterClassW,
     SystemParametersInfoW, TranslateMessage, CW_USEDEFAULT, IDC_ARROW, MB_ICONWARNING, MB_OK, MSG,
     SM_CYCAPTION, SPI_GETWORKAREA, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONDOWN, WM_PAINT, WNDCLASSW,
     WS_CAPTION, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU,
 };
 
+const ICON_ID: *const u16 = 1 as *const u16;
 const STYLE: u32 = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
 
 /// What the window procedure needs; owned, since it lives in a thread-local.
@@ -107,6 +109,8 @@ pub fn run(view: &mut View) -> Result<(), Error> {
         wc.lpfnWndProc = Some(window_proc);
         wc.hInstance = instance;
         wc.hCursor = LoadCursorW(null_mut(), IDC_ARROW);
+        // Resource 1, put there by build.rs.
+        wc.hIcon = LoadIconW(instance, ICON_ID);
         wc.lpszClassName = class.as_ptr();
         if RegisterClassW(&wc) == 0 {
             return Err("RegisterClassW failed".into());
@@ -129,6 +133,19 @@ pub fn run(view: &mut View) -> Result<(), Error> {
         );
         if hwnd.is_null() {
             return Err("CreateWindowExW failed".into());
+        }
+        // The title bar's icon, from the 16/32 px images drawn for that size rather than the
+        // big one shrunk.
+        let small = LoadImageW(
+            instance,
+            ICON_ID,
+            IMAGE_ICON,
+            GetSystemMetrics(SM_CXSMICON),
+            GetSystemMetrics(SM_CYSMICON),
+            LR_DEFAULTCOLOR,
+        );
+        if !small.is_null() {
+            SendMessageW(hwnd, WM_SETICON, ICON_SMALL as usize, small as isize);
         }
         let mut msg: MSG = std::mem::zeroed();
         while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {

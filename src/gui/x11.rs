@@ -15,6 +15,8 @@ use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
 use x11rb::COPY_DEPTH_FROM_PARENT;
 
+const WM_ICON: &[u8] = include_bytes!("../../assets/icon/wm-icon.bin");
+
 /// Escape, on both the evdev and the old XFree86 keymaps.
 const KEY_ESCAPE: u8 = 9;
 
@@ -66,6 +68,9 @@ pub fn run(view: &mut View) -> Result<(), Error> {
         b"wole-link\0wole-link\0",
     )?;
     conn.change_property32(PropMode::REPLACE, window, protocols, AtomEnum::ATOM, &[delete])?;
+    // 16 to 64 px, drawn by tools/icons.py; the window manager picks the size it needs.
+    let icon: Vec<u32> = WM_ICON.chunks_exact(4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
+    conn.change_property32(PropMode::REPLACE, window, atom(b"_NET_WM_ICON")?, AtomEnum::CARDINAL, &icon)?;
     let mut hints = WmSizeHints::new();
     hints.min_size = Some((w as i32, h as i32));
     hints.max_size = Some((w as i32, h as i32));

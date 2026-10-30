@@ -12,8 +12,6 @@ const REGULAR: &[u8] = include_bytes!("../assets/fonts/NotoSans-Regular.ttf");
 const BOLD: &[u8] = include_bytes!("../assets/fonts/NotoSans-Bold.ttf");
 
 pub const TITLE: &str = "WOL•E Link";
-/// The bottom of the wordmark's letters, in its own units (logo_wordmark.xml).
-const WORDMARK_BASELINE: f32 = 112.55;
 const PAD: i32 = 24;
 const GAP: i32 = 24;
 /// The right column: the link's data and the cards. The QR takes the left one.
@@ -178,12 +176,19 @@ fn layout(
         };
     }
 
-    // The WOL•E wordmark, then "Link" on the wordmark's baseline.
+    // The WOL•E wordmark, then "Link".
     let mark_height = 34.0 * sc;
     let k = mark_height / wordmark::HEIGHT;
     let mark_width = (wordmark::WIDTH * k).ceil() as i32;
     let title = Text::new(&fonts.bold, 25.0 * sc, TEXT);
-    let baseline = y as f32 + WORDMARK_BASELINE * k;
+    // "Link" centred on the wordmark's height: its capitals' middle on the mark's middle.
+    let (top, bottom) = wordmark::SHAPES
+        .iter()
+        .flat_map(|(_, polygons)| polygons.iter().flat_map(|p| p.iter()))
+        .fold((f32::MAX, f32::MIN), |(t, b), &(_, py)| (t.min(py), b.max(py)));
+    let middle = y as f32 + (top + bottom) / 2.0 * k;
+    let cap_height = fonts.bold.metrics('L', 25.0 * sc).height as f32;
+    let baseline = middle + cap_height / 2.0;
     draw!(|c| {
         for (color, polygons) in wordmark::SHAPES {
             c.fill(polygons, pad as f32, y as f32, k, *color);

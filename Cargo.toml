@@ -7,6 +7,7 @@ description = "Shows a QR code that registers this computer in the WOL•E Wake-
 publish = false
 
 [dependencies]
+qrcodegen = "1.8.0"
 
 [profile.release]
 opt-level = "z"
@@ -14,3 +15,9 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+
+[target."cfg(unix)".dependencies]
+libc = "0.2.191"
+
+[target."cfg(windows)".dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock", "Win32_System_Console", "Win32_System_SystemInformation", "Win32_Globalization"] }

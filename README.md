@@ -21,6 +21,17 @@ embedded font. With no display, it prints the QR in the terminal.
 
 Languages: English, Portuguese (Brazil), Portuguese (Portugal) and Spanish, the same as the app.
 
+## Usage
+
+```
+wole-link                 # suggested card, QR in the terminal
+wole-link --card NAME     # another card (the name shown in the list)
+wole-link --list          # every card, virtual ones included
+wole-link --lang pt-BR    # en, pt-BR, pt-PT or es; default: the system's language
+```
+
+For now the QR is drawn in the terminal; the window comes next.
+
 ## Link format (v1)
 
 ```

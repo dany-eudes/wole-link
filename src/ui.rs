@@ -277,7 +277,12 @@ fn layout(
                 c.disc(cx, cy, 3.6, ACCENT);
             }
             let tx = rect.x + 40;
-            let first = format!("{}  [{kind}]", card.name);
+            // Windows names its cards "Ethernet" and "Wi-Fi": no "Wi-Fi [Wi-Fi]".
+            let first = if card.name.to_lowercase().starts_with(&kind.to_lowercase()) {
+                card.name.clone()
+            } else {
+                format!("{}  [{kind}]", card.name)
+            };
             c.text(&name, tx, rect.y + 8, &first);
             if Some(i) == suggested {
                 let after = tx + name.width(&first) + 8;

@@ -31,6 +31,16 @@ fn parse_args() -> Result<Args, String> {
 }
 
 fn main() -> ExitCode {
+    let code = run();
+    if console::owns_window() {
+        let lang = parse_args().ok().and_then(|a| a.lang).unwrap_or_else(i18n::detect);
+        println!("\n{}", text(lang, Msg::PressEnter));
+        let _ = std::io::stdin().read_line(&mut String::new());
+    }
+    code
+}
+
+fn run() -> ExitCode {
     let ansi = std::io::stdout().is_terminal() && console::enable_ansi();
     let args = match parse_args() {
         Ok(args) => args,
@@ -54,7 +64,11 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
             Some(i) if !cards[i].usable() => {
-                eprintln!("{}", text(lang, Msg::CardNotUsable(name)));
+                let msg = match cards[i].kind {
+                    Kind::Virtual | Kind::Loopback => Msg::CardVirtual(name),
+                    _ => Msg::CardNotUsable(name),
+                };
+                eprintln!("{}", text(lang, msg));
                 return ExitCode::FAILURE;
             }
             Some(i) => Some(i),
@@ -131,12 +145,16 @@ mod console {
     pub fn enable_ansi() -> bool {
         std::env::var_os("NO_COLOR").is_none()
     }
+
+    pub fn owns_window() -> bool {
+        false
+    }
 }
 
 #[cfg(windows)]
 mod console {
     use windows_sys::Win32::System::Console::{
-        GetConsoleMode, GetStdHandle, SetConsoleMode, SetConsoleOutputCP,
+        GetConsoleMode, GetConsoleProcessList, GetStdHandle, SetConsoleMode, SetConsoleOutputCP,
         ENABLE_VIRTUAL_TERMINAL_PROCESSING, STD_OUTPUT_HANDLE,
     };
 
@@ -151,5 +169,13 @@ mod console {
                 && SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0
                 && std::env::var_os("NO_COLOR").is_none()
         }
+    }
+
+    /// Started by a double click in Explorer: the console window is ours alone and would close
+    /// with the QR the moment we exit.
+    pub fn owns_window() -> bool {
+        let mut ids = [0u32; 2];
+        // SAFETY: the count passed is the array's length.
+        unsafe { GetConsoleProcessList(ids.as_mut_ptr(), ids.len() as u32) == 1 }
     }
 }

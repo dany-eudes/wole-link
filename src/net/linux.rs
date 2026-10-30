@@ -11,12 +11,15 @@ pub fn list() -> Vec<Card> {
     let addresses = ipv4_addresses();
     let default_routes = default_route_interfaces();
     let Ok(entries) = fs::read_dir("/sys/class/net") else { return Vec::new() };
-    let mut cards: Vec<(u32, Card)> = entries
+    let mut cards: Vec<(u32, Option<String>, Card)> = entries
         .flatten()
         .map(|entry| {
             let name = entry.file_name().to_string_lossy().into_owned();
             let dir = entry.path();
             let index = read(&dir, "ifindex").and_then(|s| s.parse().ok()).unwrap_or(u32::MAX);
+            let master = fs::read_link(dir.join("master"))
+                .ok()
+                .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
             let card = Card {
                 kind: kind(&name, &dir),
                 // "unknown" is what some drivers report while working; the carrier says more.
@@ -31,11 +34,30 @@ pub fn list() -> Vec<Card> {
                 description: None,
                 name,
             };
-            (index, card)
+            (index, master, card)
         })
         .collect();
-    cards.sort_by_key(|(index, _)| *index);
-    cards.into_iter().map(|(_, card)| card).collect()
+    cards.sort_by_key(|(index, _, _)| *index);
+    let (masters, mut cards): (Vec<_>, Vec<_>) = cards.into_iter().map(|(_, m, c)| (m, c)).unzip();
+    inherit_from_master(&mut cards, &masters);
+    cards
+}
+
+/// A wired card in a bridge or bond (`enp3s0` in `br0` on a Proxmox or KVM host) has no address
+/// of its own: the master holds it. The card keeps its MAC, the one the magic packet must carry,
+/// and takes the master's IPv4 and default route.
+fn inherit_from_master(cards: &mut [Card], masters: &[Option<String>]) {
+    for i in 0..cards.len() {
+        let Some(master) = &masters[i] else { continue };
+        if cards[i].kind != Kind::Wired || cards[i].ipv4.is_some() {
+            continue;
+        }
+        if let Some(m) = cards.iter().position(|c| &c.name == master) {
+            let (ipv4, default_route) = (cards[m].ipv4, cards[m].default_route);
+            cards[i].ipv4 = ipv4;
+            cards[i].default_route |= default_route;
+        }
+    }
 }
 
 pub fn hostname() -> Option<String> {
@@ -115,6 +137,34 @@ fn parse_default_routes(table: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn card(name: &str, kind: Kind, ipv4: Option<(Ipv4Addr, u8)>, default_route: bool) -> Card {
+        Card {
+            name: name.into(),
+            description: None,
+            kind,
+            up: true,
+            mac: Some([2, 0, 0, 0, 0, 1]),
+            ipv4,
+            default_route,
+        }
+    }
+
+    #[test]
+    fn bridged_wired_card_takes_the_bridge_address() {
+        let ip = Some((Ipv4Addr::new(192, 168, 0, 5), 24));
+        let mut cards = vec![
+            card("enp3s0", Kind::Wired, None, false),
+            card("br0", Kind::Virtual, ip, true),
+            card("veth1", Kind::Virtual, None, false),
+        ];
+        inherit_from_master(&mut cards, &[Some("br0".into()), None, Some("br0".into())]);
+        assert_eq!((cards[0].ipv4, cards[0].default_route), (ip, true));
+        assert_eq!(cards[0].mac, Some([2, 0, 0, 0, 0, 1]));
+        // Only wired cards inherit: the veth stays as it was.
+        assert_eq!(cards[2].ipv4, None);
+        assert_eq!(super::super::suggest(&cards), Some(0));
+    }
 
     #[test]
     fn mac_from_sysfs() {

@@ -56,6 +56,8 @@ pub enum Msg<'a> {
     NoCard,
     CardNotFound(&'a str),
     CardNotUsable(&'a str),
+    CardVirtual(&'a str),
+    PressEnter,
     Usage,
 }
 
@@ -127,11 +129,24 @@ pub fn text(lang: Lang, msg: Msg) -> String {
             Es => format!("Ninguna tarjeta de red se llama “{name}”."),
         },
         CardNotUsable(name) => match lang {
-            En => format!("“{name}” can't be used: it must be connected and have an IPv4 address and a MAC address."),
-            PtBr => format!("Não dá para usar “{name}”: ela precisa estar conectada e ter endereço IPv4 e MAC."),
-            PtPt => format!("Não é possível usar “{name}”: tem de estar ligada e ter endereço IPv4 e MAC."),
-            Es => format!("No se puede usar “{name}”: debe estar conectada y tener dirección IPv4 y MAC."),
+            En => format!("“{name}” can't be used: it must be connected, with an IPv4 address and a MAC."),
+            PtBr => format!("Não dá para usar “{name}”: ela precisa estar conectada, com endereço IPv4 e MAC."),
+            PtPt => format!("Não é possível usar “{name}”: tem de estar ligada, com endereço IPv4 e MAC."),
+            Es => format!("No se puede usar “{name}”: debe estar conectada, con dirección IPv4 y MAC."),
         },
+        CardVirtual(name) => match lang {
+            En => format!("“{name}” is a virtual card: Wake-on-LAN needs the physical one."),
+            PtBr => format!("“{name}” é uma placa virtual: o Wake-on-LAN precisa da placa física."),
+            PtPt => format!("“{name}” é uma placa virtual: o Wake-on-LAN precisa da placa física."),
+            Es => format!("“{name}” es una tarjeta virtual: Wake-on-LAN necesita la tarjeta física."),
+        },
+        PressEnter => match lang {
+            En => "Press Enter to close.",
+            PtBr => "Tecle Enter para fechar.",
+            PtPt => "Prima Enter para fechar.",
+            Es => "Presiona Enter para cerrar.",
+        }
+        .into(),
         Usage => match lang {
             En => "Usage: wole-link [--card NAME] [--list] [--lang en|pt-BR|pt-PT|es]\n\
                    \n  --card NAME  use this network card instead of the suggested one\

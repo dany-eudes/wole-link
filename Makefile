@@ -12,4 +12,8 @@ linux:
 windows:
 	$(RUN) cargo build --release --target x86_64-pc-windows-gnu
 
-.PHONY: test linux windows
+.PHONY: test linux windows png
+
+## The window in each language, as target/ui-*.png
+png:
+	$(RUN) cargo test -- --ignored png

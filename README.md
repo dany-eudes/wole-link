@@ -24,13 +24,14 @@ Languages: English, Portuguese (Brazil), Portuguese (Portugal) and Spanish, the 
 ## Usage
 
 ```
-wole-link                 # suggested card, QR in the terminal
+wole-link                 # window with the suggested card; click another card to switch
+wole-link --text          # QR in the terminal (also when there's no display)
 wole-link --card NAME     # another card (the name shown in the list)
 wole-link --list          # every card, virtual ones included
 wole-link --lang pt-BR    # en, pt-BR, pt-PT or es; default: the system's language
 ```
 
-For now the QR is drawn in the terminal; the window comes next.
+The window is on Linux for now; Windows still prints the QR in the console.
 
 ## Link format (v1)
 
@@ -60,8 +61,10 @@ Everything runs in Docker; nothing to install on the host besides Docker and `ma
 make test      # unit tests
 make linux     # target/x86_64-unknown-linux-musl/release/wole-link (static)
 make windows   # target/x86_64-pc-windows-gnu/release/wole-link.exe (for testing in a VM)
+make png       # the window in each language, as target/ui-*.png
 ```
 
 ## License
 
-[MIT](LICENSE).
+[MIT](LICENSE). The embedded font is Noto Sans, subset to the Latin characters the four
+languages use, under the [SIL Open Font License 1.1](assets/fonts/OFL.txt).

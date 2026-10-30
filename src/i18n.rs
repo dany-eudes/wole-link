@@ -53,11 +53,17 @@ pub enum Msg<'a> {
     Disconnected,
     NoIpv4,
     WirelessWarning,
+    WirelessChosen,
     NoCard,
     CardNotFound(&'a str),
     CardNotUsable(&'a str),
     CardVirtual(&'a str),
     PressEnter,
+    LabelName,
+    LabelMac,
+    LabelIp,
+    LabelBroadcast,
+    LabelPort,
     Usage,
 }
 
@@ -116,6 +122,13 @@ pub fn text(lang: Lang, msg: Msg) -> String {
                    con cable conectada. Se muestra la tarjeta Wi-Fi.",
         }
         .into(),
+        WirelessChosen => match lang {
+            En => "Wake-on-LAN usually works only over a cable: prefer the wired card.",
+            PtBr => "O Wake-on-LAN quase sempre só funciona pelo cabo: prefira a placa com cabo.",
+            PtPt => "O Wake-on-LAN quase sempre só funciona por cabo: prefira a placa com cabo.",
+            Es => "Wake-on-LAN casi siempre funciona solo por cable: prefiere la tarjeta con cable.",
+        }
+        .into(),
         NoCard => match lang {
             En => "No connected network card with an IPv4 address was found.",
             PtBr => "Nenhuma placa de rede conectada e com endereço IPv4 foi encontrada.",
@@ -147,21 +160,51 @@ pub fn text(lang: Lang, msg: Msg) -> String {
             Es => "Presiona Enter para cerrar.",
         }
         .into(),
+        // The labels of the app's Add device form, without the "*" and the hints.
+        LabelName => match lang {
+            En => "Device Name",
+            PtBr | PtPt => "Nome do Dispositivo",
+            Es => "Nombre del Dispositivo",
+        }
+        .into(),
+        LabelMac => match lang {
+            En => "MAC Address",
+            PtBr | PtPt => "Endereço MAC",
+            Es => "Dirección MAC",
+        }
+        .into(),
+        LabelIp => "IP".into(),
+        LabelBroadcast => match lang {
+            En => "Broadcast Address",
+            PtBr | PtPt => "Endereço de Broadcast",
+            Es => "Dirección de Broadcast",
+        }
+        .into(),
+        LabelPort => match lang {
+            En => "UDP Port",
+            PtBr | PtPt => "Porta UDP",
+            Es => "Puerto UDP",
+        }
+        .into(),
         Usage => match lang {
-            En => "Usage: wole-link [--card NAME] [--list] [--lang en|pt-BR|pt-PT|es]\n\
+            En => "Usage: wole-link [--card NAME] [--text] [--list] [--lang en|pt-BR|pt-PT|es]\n\
                    \n  --card NAME  use this network card instead of the suggested one\
+                   \n  --text       QR in the terminal, without a window\
                    \n  --list       list every network card, virtual ones included\
                    \n  --lang       language of the messages",
-            PtBr => "Uso: wole-link [--card NOME] [--list] [--lang en|pt-BR|pt-PT|es]\n\
+            PtBr => "Uso: wole-link [--card NOME] [--text] [--list] [--lang en|pt-BR|pt-PT|es]\n\
                      \n  --card NOME  usa esta placa de rede em vez da sugerida\
+                     \n  --text       QR no terminal, sem janela\
                      \n  --list       lista todas as placas de rede, também as virtuais\
                      \n  --lang       idioma das mensagens",
-            PtPt => "Utilização: wole-link [--card NOME] [--list] [--lang en|pt-BR|pt-PT|es]\n\
+            PtPt => "Utilização: wole-link [--card NOME] [--text] [--list] [--lang en|pt-BR|pt-PT|es]\n\
                      \n  --card NOME  usa esta placa de rede em vez da sugerida\
+                     \n  --text       QR no terminal, sem janela\
                      \n  --list       lista todas as placas de rede, também as virtuais\
                      \n  --lang       idioma das mensagens",
-            Es => "Uso: wole-link [--card NOMBRE] [--list] [--lang en|pt-BR|pt-PT|es]\n\
+            Es => "Uso: wole-link [--card NOMBRE] [--text] [--list] [--lang en|pt-BR|pt-PT|es]\n\
                    \n  --card NOMBRE  usa esta tarjeta de red en lugar de la sugerida\
+                   \n  --text         QR en la terminal, sin ventana\
                    \n  --list         lista todas las tarjetas de red, también las virtuales\
                    \n  --lang         idioma de los mensajes",
         }

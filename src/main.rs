@@ -1,7 +1,9 @@
+mod gui;
 mod i18n;
 mod link;
 mod net;
 mod qr;
+mod ui;
 
 use i18n::{text, Lang, Msg};
 use net::{Card, Kind};
@@ -11,17 +13,19 @@ use std::process::ExitCode;
 struct Args {
     card: Option<String>,
     list_only: bool,
+    text: bool,
     lang: Option<Lang>,
     help: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
-    let mut args = Args { card: None, list_only: false, lang: None, help: false };
+    let mut args = Args { card: None, list_only: false, text: false, lang: None, help: false };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--card" => args.card = Some(it.next().ok_or("--card")?),
             "--list" => args.list_only = true,
+            "--text" => args.text = true,
             "--lang" => args.lang = Some(i18n::parse(&it.next().ok_or("--lang")?)),
             "-h" | "--help" => args.help = true,
             other => return Err(other.to_string()),
@@ -75,6 +79,18 @@ fn run() -> ExitCode {
         },
         None => net::suggest(&cards),
     };
+    let hostname = net::hostname();
+    if !args.text && !args.list_only {
+        if let Some(chosen) = chosen {
+            let mut view = ui::View { lang, cards: &cards, chosen, hostname: hostname.as_deref() };
+            match gui::run(&mut view) {
+                Ok(()) => return ExitCode::SUCCESS,
+                // No display, or none we can use: the terminal still works.
+                Err(e) if std::env::var_os("WOLE_LINK_DEBUG").is_some() => eprintln!("window: {e}"),
+                Err(_) => {}
+            }
+        }
+    }
     print_cards(lang, &cards, chosen, args.list_only);
     if args.list_only {
         return ExitCode::SUCCESS;
@@ -87,15 +103,7 @@ fn run() -> ExitCode {
         println!("\n{}", text(lang, Msg::WirelessWarning));
     }
 
-    let (ip, prefix) = card.ipv4.expect("usable cards have IPv4");
-    let device = link::Device {
-        mac: card.mac.expect("usable cards have a MAC"),
-        name: net::hostname(),
-        ip: Some(ip),
-        broadcast: Some(link::broadcast(ip, prefix)),
-        port: Some(9),
-    };
-    let url = link::build(&device);
+    let url = link::build(&ui::device(card, hostname.as_deref()));
     println!("\n{}\n", text(lang, Msg::Scan));
     print!("{}", qr::render(&url, ansi));
     println!("\n{url}");

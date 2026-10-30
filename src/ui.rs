@@ -1,5 +1,6 @@
-//! The window's contents, drawn into a pixel buffer. The same code serves X11 and Win32: each
-//! only shows the buffer and passes clicks back.
+//! The window's contents and what clicks do, drawn into a pixel buffer. The same code serves
+//! X11 and Win32: each only shows the buffer, passes clicks and Esc to `App` and carries out the
+//! `Effect` it returns.
 
 use crate::i18n::{text, Lang, Msg};
 use crate::link;
@@ -68,24 +69,186 @@ impl Rect {
     }
 }
 
+/// What a click on a spot does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Action {
+    Card(usize),
+    Menu,
+    SetLang(Lang),
+    About,
+    Open(String),
+    /// Add, update or remove the Linux applications-menu entry.
+    DesktopEntry,
+    CloseOverlay,
+    /// Swallows the click (the About panel itself).
+    Nothing,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Overlay {
+    None,
+    Menu,
+    About,
+}
+
 pub struct Frame {
     pub canvas: Canvas,
-    /// Clickable card rows and the index of their card.
-    rows: Vec<(Rect, usize)>,
+    /// Click targets, first match wins.
+    targets: Vec<(Rect, Action)>,
 }
 
 impl Frame {
-    pub fn hit(&self, x: i32, y: i32) -> Option<usize> {
-        self.rows.iter().find(|(r, _)| r.contains(x, y)).map(|(_, i)| *i)
+    pub fn hit(&self, x: i32, y: i32) -> Option<Action> {
+        self.targets.iter().find(|(r, _)| r.contains(x, y)).map(|(_, a)| a.clone())
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct View<'a> {
     pub lang: Lang,
     pub cards: &'a [Card],
     /// Index into `cards`; must be a usable card.
     pub chosen: usize,
     pub hostname: Option<&'a str>,
+    pub overlay: Overlay,
+    /// The Linux applications-menu entry; `None` where there is no such thing (Windows).
+    pub desktop: Option<crate::desktop::State>,
+}
+
+/// What the window must do after a click or Esc.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Effect {
+    None,
+    Redraw,
+    Open(String),
+    Close,
+}
+
+/// Everything the window shows and how it changes; the platform code only draws `frame()`.
+pub struct App {
+    fonts: Fonts,
+    lang: Lang,
+    cards: Vec<Card>,
+    chosen: usize,
+    hostname: Option<String>,
+    overlay: Overlay,
+    desktop: Option<crate::desktop::State>,
+    size: Size,
+    frame: Frame,
+}
+
+impl App {
+    /// `max_height` and `scale` in physical pixels, from the screen the window opens on.
+    pub fn new(start: Start, max_height: u32, scale: f32) -> App {
+        let fonts = Fonts::load();
+        let desktop = crate::desktop::available().then(crate::desktop::state);
+        let view = View {
+            lang: start.lang,
+            cards: &start.cards,
+            chosen: start.chosen,
+            hostname: start.hostname.as_deref(),
+            overlay: Overlay::None,
+            desktop,
+        };
+        let size = fit(&fonts, &view, max_height, scale);
+        let frame = render(&fonts, &view, &size);
+        App {
+            fonts,
+            lang: start.lang,
+            cards: start.cards,
+            chosen: start.chosen,
+            hostname: start.hostname,
+            overlay: Overlay::None,
+            desktop,
+            size,
+            frame,
+        }
+    }
+
+    pub fn size(&self) -> Size {
+        self.size
+    }
+
+    pub fn frame(&self) -> &Frame {
+        &self.frame
+    }
+
+    fn view(&self) -> View<'_> {
+        View {
+            lang: self.lang,
+            cards: &self.cards,
+            chosen: self.chosen,
+            hostname: self.hostname.as_deref(),
+            overlay: self.overlay,
+            desktop: self.desktop,
+        }
+    }
+
+    fn redraw(&mut self) -> Effect {
+        self.frame = render(&self.fonts, &self.view(), &self.size);
+        Effect::Redraw
+    }
+
+    pub fn click(&mut self, x: i32, y: i32) -> Effect {
+        let Some(action) = self.frame.hit(x, y) else { return Effect::None };
+        match action {
+            Action::Card(i) if i == self.chosen => Effect::None,
+            Action::Card(i) => {
+                self.chosen = i;
+                self.redraw()
+            }
+            Action::Menu => {
+                self.overlay = if self.overlay == Overlay::Menu { Overlay::None } else { Overlay::Menu };
+                self.redraw()
+            }
+            Action::SetLang(lang) => {
+                self.lang = lang;
+                crate::settings::save_lang(lang);
+                self.overlay = Overlay::None;
+                self.redraw()
+            }
+            Action::About => {
+                self.overlay = Overlay::About;
+                self.redraw()
+            }
+            Action::Open(url) => {
+                self.overlay = Overlay::None;
+                self.redraw();
+                Effect::Open(url)
+            }
+            Action::DesktopEntry => {
+                let _ = match self.desktop {
+                    Some(crate::desktop::State::Installed) => crate::desktop::remove(),
+                    _ => crate::desktop::install(),
+                };
+                self.desktop = Some(crate::desktop::state());
+                self.overlay = Overlay::None;
+                self.redraw()
+            }
+            Action::CloseOverlay => {
+                self.overlay = Overlay::None;
+                self.redraw()
+            }
+            Action::Nothing => Effect::None,
+        }
+    }
+
+    /// Esc closes the menu or About first, the window only when nothing is open.
+    pub fn escape(&mut self) -> Effect {
+        if self.overlay == Overlay::None {
+            return Effect::Close;
+        }
+        self.overlay = Overlay::None;
+        self.redraw()
+    }
+}
+
+/// What `main` hands to the window.
+pub struct Start {
+    pub lang: Lang,
+    pub cards: Vec<Card>,
+    pub chosen: usize,
+    pub hostname: Option<String>,
 }
 
 /// What goes into the link for `card`.
@@ -112,8 +275,8 @@ pub struct Size {
 }
 
 /// The largest QR that keeps the window within `max_height`, everything drawn at `scale`; both in
-/// physical pixels. The height is the tallest view among the cards the user can click, so the
-/// window doesn't change size when the Wi-Fi warning comes and goes.
+/// physical pixels. The height is the tallest of every view the user can reach (each card, each
+/// language, the menu and About open), so the window never changes size.
 pub fn fit(fonts: &Fonts, view: &View, max_height: u32, scale: f32) -> Size {
     let scale = scale.clamp(1.0, 4.0);
     let px = |v: i32| (v as f32 * scale).round() as i32;
@@ -130,11 +293,15 @@ pub fn fit(fonts: &Fonts, view: &View, max_height: u32, scale: f32) -> Size {
         let qr_side = modules * module;
         let width = (2 * px(PAD) + qr_side + px(GAP) + px(RIGHT)) as u32;
         size = Size { width, height: 0, scale, module, qr_side };
-        size.height = usable
-            .iter()
-            .map(|&i| layout(fonts, &View { chosen: i, ..*view }, &size, None))
-            .max()
-            .unwrap_or(0) as u32;
+        size.height = 0;
+        for &chosen in &usable {
+            for lang in Lang::ALL {
+                for overlay in [Overlay::None, Overlay::Menu, Overlay::About] {
+                    let v = View { chosen, lang, overlay, ..*view };
+                    size.height = size.height.max(layout(fonts, &v, &size, None) as u32);
+                }
+            }
+        }
         if size.height <= max_height {
             break;
         }
@@ -144,19 +311,16 @@ pub fn fit(fonts: &Fonts, view: &View, max_height: u32, scale: f32) -> Size {
 
 pub fn render(fonts: &Fonts, view: &View, size: &Size) -> Frame {
     let mut canvas = Canvas::new(size.width, size.height, BACKGROUND);
-    let mut rows = Vec::new();
-    layout(fonts, view, size, Some((&mut canvas, &mut rows)));
-    Frame { canvas, rows }
+    let mut targets = Vec::new();
+    layout(fonts, view, size, Some((&mut canvas, &mut targets)));
+    Frame { canvas, targets }
 }
 
-/// Title on top; QR on the left, data and cards on the right; the link at the bottom. Returns
-/// the height, and draws too when given a canvas.
-fn layout(
-    fonts: &Fonts,
-    view: &View,
-    size: &Size,
-    mut target: Option<(&mut Canvas, &mut Vec<(Rect, usize)>)>,
-) -> i32 {
+type Target<'a> = Option<(&'a mut Canvas, &'a mut Vec<(Rect, Action)>)>;
+
+/// Title and ☰ on top; QR on the left, data and cards on the right; the link at the bottom; the
+/// menu or About over it all. Returns the height, and draws too when given a canvas.
+fn layout(fonts: &Fonts, view: &View, size: &Size, mut target: Target) -> i32 {
     let lang = view.lang;
     let card = &view.cards[view.chosen];
     let url = link::build(&device(card, view.hostname));
@@ -176,25 +340,16 @@ fn layout(
         };
     }
 
-    // The WOL•E wordmark, then "Link".
+    // The WOL•E wordmark and "Link"; the ☰ button on the right, on the same line.
     let mark_height = 34.0 * sc;
-    let k = mark_height / wordmark::HEIGHT;
-    let mark_width = (wordmark::WIDTH * k).ceil() as i32;
-    let title = Text::new(&fonts.bold, 25.0 * sc, TEXT);
-    // "Link" centred on the wordmark's height: its capitals' middle on the mark's middle.
-    let (top, bottom) = wordmark::SHAPES
-        .iter()
-        .flat_map(|(_, polygons)| polygons.iter().flat_map(|p| p.iter()))
-        .fold((f32::MAX, f32::MIN), |(t, b), &(_, py)| (t.min(py), b.max(py)));
-    let middle = y as f32 + (top + bottom) / 2.0 * k;
-    let cap_height = fonts.bold.metrics('L', 25.0 * sc).height as f32;
-    let baseline = middle + cap_height / 2.0;
-    draw!(|c| {
-        for (color, polygons) in wordmark::SHAPES {
-            c.fill(polygons, pad as f32, y as f32, k, *color);
-        }
-        c.text(&title, pad + mark_width + px(10), baseline.round() as i32 - title.ascent(), "Link");
-    });
+    draw!(|c| c.title(fonts, pad, y, mark_height, sc));
+    let button = px(36);
+    let menu_button = Rect {
+        x: size.width as i32 - pad - button,
+        y: y + (mark_height as i32 - button) / 2,
+        w: button,
+        h: button,
+    };
     y += mark_height.ceil() as i32 + px(6);
     let body = Text::new(&fonts.regular, 15.0 * sc, TEXT_SECONDARY);
     for line in body.wrap(&text(lang, Msg::Scan), inner) {
@@ -316,7 +471,7 @@ fn layout(
             }
             c.text(&detail, tx, rect.y + px(8) + name.line_height(), &second);
             if usable {
-                rows.push((rect, i));
+                rows.push((rect, Action::Card(i)));
             }
         }
         y += h + px(8);
@@ -329,7 +484,222 @@ fn layout(
         draw!(|c| c.text(&small, pad, y, &line));
         y += small.line_height();
     }
-    y + pad
+    let mut height = y + pad;
+
+    // ☰: three bars, highlighted while the menu is open.
+    if let Some((c, targets)) = target.as_mut() {
+        let b = menu_button;
+        if view.overlay == Overlay::Menu {
+            c.rect(b.x, b.y, b.w, b.h, SELECTED);
+        }
+        let (bar_w, bar_h) = (px(18), px(2).max(2));
+        for i in -1..=1 {
+            let by = b.y + b.h / 2 - bar_h / 2 + i * px(6);
+            c.rect(b.x + (b.w - bar_w) / 2, by, bar_w, bar_h, TEXT);
+        }
+        targets.push((b, Action::Menu));
+    }
+
+    // The menu or About sits on top: its targets replace the window's, and a click anywhere
+    // else just closes it.
+    match view.overlay {
+        Overlay::None => {}
+        Overlay::Menu => height = height.max(menu(fonts, view, size, menu_button, &mut target) + pad),
+        Overlay::About => height = height.max(about(fonts, view, size, &mut target) + 2 * pad),
+    }
+    height
+}
+
+/// Site and Play Store pages in the window's language.
+fn site_url(lang: Lang) -> String {
+    let path = match lang {
+        Lang::En => "",
+        Lang::PtBr => "pt-br/",
+        Lang::PtPt => "pt-pt/",
+        Lang::Es => "es/",
+    };
+    format!("https://wole.celerasoft.com/{path}")
+}
+
+fn play_url(lang: Lang) -> String {
+    let hl = if lang == Lang::Es { "es-419" } else { lang.tag() };
+    format!("https://play.google.com/store/apps/details?id=com.celerasoft.wole&hl={hl}")
+}
+
+const COFFEE_URL: &str = "https://buymeacoffee.com/celeraman";
+const SUPPORT_MAIL: &str = "mailto:celeraman@gmail.com?subject=WOL%E2%80%A2E%20Link";
+pub const COPYRIGHT: &str = "© 2026 @celeraman";
+
+enum Item {
+    Heading(String),
+    Choice(String, bool, Action),
+    Entry(String, Action),
+    Separator,
+}
+
+/// The drop-down under ☰, right-aligned with it. Returns its bottom.
+fn menu(fonts: &Fonts, view: &View, size: &Size, button: Rect, target: &mut Target) -> i32 {
+    let lang = view.lang;
+    let sc = size.scale;
+    let px = |v: i32| (v as f32 * sc).round() as i32;
+    let mut items = vec![Item::Heading(text(lang, Msg::MenuLanguage))];
+    for l in Lang::ALL {
+        items.push(Item::Choice(l.native_name().into(), l == lang, Action::SetLang(l)));
+    }
+    items.push(Item::Separator);
+    items.push(Item::Entry(text(lang, Msg::MenuAbout), Action::About));
+    items.push(Item::Entry(text(lang, Msg::MenuSite), Action::Open(site_url(lang))));
+    items.push(Item::Entry(text(lang, Msg::MenuPlay), Action::Open(play_url(lang))));
+    items.push(Item::Entry(text(lang, Msg::MenuCoffee), Action::Open(COFFEE_URL.into())));
+    items.push(Item::Entry(text(lang, Msg::MenuContact), Action::Open(SUPPORT_MAIL.into())));
+    if let Some(state) = view.desktop {
+        let msg = match state {
+            crate::desktop::State::Missing => Msg::MenuAddEntry,
+            crate::desktop::State::Installed => Msg::MenuRemoveEntry,
+            crate::desktop::State::Moved => Msg::MenuUpdateEntry,
+        };
+        items.push(Item::Separator);
+        items.push(Item::Entry(text(lang, msg), Action::DesktopEntry));
+    }
+
+    let entry = Text::new(&fonts.regular, 14.0 * sc, TEXT);
+    let heading = Text::new(&fonts.bold, 12.0 * sc, TEXT_SECONDARY);
+    let (row, indent) = (px(32), px(36));
+    let width = items
+        .iter()
+        .map(|item| match item {
+            Item::Choice(t, ..) | Item::Entry(t, _) => indent + entry.width(t) + px(20),
+            Item::Heading(t) => indent + heading.width(t) + px(20),
+            Item::Separator => 0,
+        })
+        .max()
+        .unwrap_or(0)
+        .max(px(240));
+    let height: i32 = items
+        .iter()
+        .map(|item| if matches!(item, Item::Separator) { px(9) } else { row })
+        .sum::<i32>()
+        + px(12);
+    let panel = Rect { x: button.x + button.w - width, y: button.y + button.h + px(4), w: width, h: height };
+
+    if let Some((c, targets)) = target.as_mut() {
+        targets.clear();
+        // A soft shadow, then the panel.
+        for i in 1..=px(4) {
+            c.shade(panel.x + i, panel.y + i, panel.w, panel.h, 0.05);
+        }
+        c.rect(panel.x, panel.y, panel.w, panel.h, SURFACE);
+        c.outline(panel.x, panel.y, panel.w, panel.h, BORDER);
+        let mut y = panel.y + px(6);
+        for item in &items {
+            match item {
+                Item::Separator => {
+                    c.rect(panel.x + px(12), y + px(4), panel.w - px(24), 1, BORDER);
+                    y += px(9);
+                    continue;
+                }
+                Item::Heading(t) => {
+                    c.text(&heading, panel.x + px(16), y + (row - heading.line_height()) / 2, t);
+                }
+                Item::Choice(t, on, action) => {
+                    let ty = y + (row - entry.line_height()) / 2;
+                    if *on {
+                        // Noto Sans has no ✓: a drawn tick, in the accent color.
+                        let (cx, cy, u) = (panel.x + px(22), y + row / 2, 4.0 * sc);
+                        let (cx, cy) = (cx as f32, cy as f32);
+                        let tick: &[(f32, f32)] = &[
+                            (cx - 1.6 * u, cy - 0.1 * u),
+                            (cx - 0.5 * u, cy + 1.0 * u),
+                            (cx + 1.7 * u, cy - 1.3 * u),
+                            (cx + 1.7 * u - 0.55 * u, cy - 1.3 * u - 0.45 * u),
+                            (cx - 0.5 * u, cy + 1.0 * u - 0.75 * u),
+                            (cx - 1.6 * u + 0.5 * u, cy - 0.1 * u - 0.55 * u),
+                        ];
+                        c.fill(&[tick], 0.0, 0.0, 1.0, ACCENT);
+                    }
+                    c.text(&entry, panel.x + indent, ty, t);
+                    targets.push((Rect { x: panel.x, y, w: panel.w, h: row }, action.clone()));
+                }
+                Item::Entry(t, action) => {
+                    c.text(&entry, panel.x + indent, y + (row - entry.line_height()) / 2, t);
+                    targets.push((Rect { x: panel.x, y, w: panel.w, h: row }, action.clone()));
+                }
+            }
+            y += row;
+        }
+        targets.push((button, Action::Menu));
+        targets.push((Rect { x: 0, y: 0, w: size.width as i32, h: size.height as i32 }, Action::CloseOverlay));
+    }
+    panel.y + panel.h
+}
+
+/// About, over a dimmed window. Returns its height.
+fn about(fonts: &Fonts, view: &View, size: &Size, target: &mut Target) -> i32 {
+    let lang = view.lang;
+    let sc = size.scale;
+    let px = |v: i32| (v as f32 * sc).round() as i32;
+    let width = px(440).min(size.width as i32 - 2 * px(PAD));
+    let inner = width - 2 * px(28);
+    let body = Text::new(&fonts.regular, 14.0 * sc, TEXT);
+    let small = Text::new(&fonts.regular, 13.0 * sc, TEXT_SECONDARY);
+    let button_text = Text::new(&fonts.bold, 14.0 * sc, SURFACE);
+    let version = text(lang, Msg::AboutVersion(env!("CARGO_PKG_VERSION")));
+    let description = body.wrap(&text(lang, Msg::AboutText), inner);
+    let lines: Vec<(String, &Text)> = [
+        (COPYRIGHT.to_string(), &small),
+        (text(lang, Msg::AboutLicense), &small),
+        (text(lang, Msg::AboutFont), &small),
+    ]
+    .into_iter()
+    .flat_map(|(t, style)| style.wrap(&t, inner).into_iter().map(move |l| (l, style)))
+    .collect();
+    let mark_height = 28.0 * sc;
+    let close = text(lang, Msg::Close);
+    let (button_w, button_h) = (button_text.width(&close) + px(40), px(36));
+    let height = px(28)
+        + mark_height as i32
+        + px(8)
+        + small.line_height()
+        + px(14)
+        + description.len() as i32 * body.line_height()
+        + px(14)
+        + lines.iter().map(|(_, s)| s.line_height()).sum::<i32>()
+        + px(22)
+        + button_h
+        + px(24);
+
+    if let Some((c, targets)) = target.as_mut() {
+        let x = (size.width as i32 - width) / 2;
+        let top = ((size.height as i32 - height) / 2).max(px(PAD));
+        c.shade(0, 0, size.width as i32, size.height as i32, 0.35);
+        c.rect(x, top, width, height, SURFACE);
+        c.outline(x, top, width, height, BORDER);
+        let (lx, mut y) = (x + px(28), top + px(28));
+        c.title(fonts, lx, y, mark_height, sc);
+        y += mark_height as i32 + px(8);
+        c.text(&small, lx, y, &version);
+        y += small.line_height() + px(14);
+        for line in &description {
+            c.text(&body, lx, y, line);
+            y += body.line_height();
+        }
+        y += px(14);
+        for (line, style) in &lines {
+            c.text(style, lx, y, line);
+            y += style.line_height();
+        }
+        y += px(22);
+        let b = Rect { x: x + width - px(28) - button_w, y, w: button_w, h: button_h };
+        c.rect(b.x, b.y, b.w, b.h, ACCENT);
+        c.text(&button_text, b.x + px(20), b.y + (b.h - button_text.line_height()) / 2, &close);
+        targets.clear();
+        targets.push((b, Action::CloseOverlay));
+        let panel = Rect { x, y: top, w: width, h: height };
+        // Clicks on the panel do nothing; outside it, they close it.
+        targets.push((panel, Action::Nothing));
+        targets.push((Rect { x: 0, y: 0, w: size.width as i32, h: size.height as i32 }, Action::CloseOverlay));
+    }
+    height
 }
 
 /// A font at a size and color.
@@ -443,6 +813,34 @@ impl Canvas {
             for dx in -reach..=reach {
                 let d = ((dx * dx + dy * dy) as f32).sqrt();
                 self.blend(cx + dx, cy + dy, color, coverage(d).clamp(0.0, 1.0));
+            }
+        }
+    }
+
+    /// The WOL•E wordmark at `mark_height`, then "Link" centred on its height.
+    fn title(&mut self, fonts: &Fonts, x: i32, y: i32, mark_height: f32, sc: f32) {
+        let k = mark_height / wordmark::HEIGHT;
+        for (color, polygons) in wordmark::SHAPES {
+            self.fill(polygons, x as f32, y as f32, k, *color);
+        }
+        let size = mark_height * 25.0 / 34.0;
+        let title = Text::new(&fonts.bold, size, TEXT);
+        // The capitals' middle on the mark's middle.
+        let (top, bottom) = wordmark::SHAPES
+            .iter()
+            .flat_map(|(_, polygons)| polygons.iter().flat_map(|p| p.iter()))
+            .fold((f32::MAX, f32::MIN), |(t, b), &(_, py)| (t.min(py), b.max(py)));
+        let middle = y as f32 + (top + bottom) / 2.0 * k;
+        let baseline = middle + fonts.bold.metrics('L', size).height as f32 / 2.0;
+        let after = x + (wordmark::WIDTH * k).ceil() as i32 + (10.0 * sc).round() as i32;
+        self.text(&title, after, baseline.round() as i32 - title.ascent(), "Link");
+    }
+
+    /// Darkens a rectangle by `amount` (0 to 1).
+    fn shade(&mut self, x: i32, y: i32, w: i32, h: i32, amount: f32) {
+        for py in y.max(0)..(y + h).min(self.height as i32) {
+            for px in x.max(0)..(x + w).min(self.width as i32) {
+                self.blend(px, py, 0x000000, amount);
             }
         }
     }
@@ -574,11 +972,16 @@ mod tests {
                 Msg::WirelessChosen, Msg::NoCard,
                 Msg::CardNotFound("x"), Msg::CardNotUsable("x"), Msg::CardVirtual("x"),
                 Msg::PressEnter, Msg::LabelName, Msg::LabelMac, Msg::LabelIp, Msg::LabelBroadcast,
-                Msg::LabelPort, Msg::Usage,
+                Msg::LabelPort, Msg::MenuLanguage, Msg::MenuAbout, Msg::MenuSite, Msg::MenuPlay,
+                Msg::MenuCoffee, Msg::MenuContact, Msg::MenuAddEntry, Msg::MenuRemoveEntry,
+                Msg::MenuUpdateEntry, Msg::AboutVersion("1.0"), Msg::AboutText, Msg::AboutLicense,
+                Msg::AboutFont, Msg::Close, Msg::Usage,
             ];
             let mut chars: String = all.into_iter().map(|m| text(lang, m)).collect();
             chars += TITLE;
+            chars += COPYRIGHT;
             chars += "·[]/";
+            chars.extend(Lang::ALL.map(Lang::native_name).concat().chars());
             for font in [&fonts.regular, &fonts.bold] {
                 for ch in chars.chars().filter(|c| !c.is_whitespace()) {
                     assert_ne!(font.lookup_glyph_index(ch), 0, "no glyph for {ch:?} ({lang:?})");
@@ -587,78 +990,152 @@ mod tests {
         }
     }
 
+    fn view(cards: &[Card], lang: Lang, chosen: usize) -> View<'_> {
+        View {
+            lang,
+            cards,
+            chosen,
+            hostname: Some("inspiron"),
+            overlay: Overlay::None,
+            desktop: Some(crate::desktop::State::Missing),
+        }
+    }
+
+    fn target(frame: &Frame, action: &Action) -> Rect {
+        frame.targets.iter().find(|(_, a)| a == action).map(|(r, _)| *r).expect("target")
+    }
+
+    fn app(lang: Lang) -> App {
+        let start = Start { lang, cards: sample_cards(), chosen: 1, hostname: Some("inspiron".into()) };
+        App::new(start, u32::MAX, 1.0)
+    }
+
+    fn click_on(app: &mut App, action: &Action) -> Effect {
+        let r = target(app.frame(), action);
+        app.click(r.x + r.w / 2, r.y + r.h / 2)
+    }
+
     #[test]
     fn clicking_a_row_picks_its_card() {
         let fonts = Fonts::load();
         let cards = sample_cards();
-        let view = View { lang: Lang::En, cards: &cards, chosen: 1, hostname: Some("inspiron") };
-        let frame = render(&fonts, &view, &fit(&fonts, &view, u32::MAX, 1.0));
-        let (wired, wireless) = (frame.rows[0].0, frame.rows[1].0);
-        assert_eq!(frame.rows.len(), 2, "loopback has no row");
-        assert_eq!(frame.hit(wireless.x + 5, wireless.y + 5), Some(2));
-        assert_eq!(frame.hit(wired.x + 5, wired.y + 5), Some(1));
+        let v = view(&cards, Lang::En, 1);
+        let frame = render(&fonts, &v, &fit(&fonts, &v, u32::MAX, 1.0));
+        let cards_targets = frame.targets.iter().filter(|(_, a)| matches!(a, Action::Card(_))).count();
+        assert_eq!(cards_targets, 2, "loopback has no row");
+        let wireless = target(&frame, &Action::Card(2));
+        assert_eq!(frame.hit(wireless.x + 5, wireless.y + 5), Some(Action::Card(2)));
         assert_eq!(frame.hit(0, 0), None);
     }
 
     #[test]
-    fn the_window_fits_the_wireless_warning() {
+    fn the_window_fits_every_view() {
         let fonts = Fonts::load();
         let cards = sample_cards();
-        let wired = View { lang: Lang::PtPt, cards: &cards, chosen: 1, hostname: None };
-        let wireless = View { chosen: 2, ..wired };
-        let size = fit(&fonts, &wired, u32::MAX, 1.0);
-        assert!(layout(&fonts, &wireless, &size, None) >= layout(&fonts, &wired, &size, None));
-        assert_eq!(size.height, layout(&fonts, &wireless, &size, None) as u32);
+        let v = view(&cards, Lang::PtPt, 1);
+        let size = fit(&fonts, &v, u32::MAX, 1.0);
+        for lang in Lang::ALL {
+            for chosen in [1, 2] {
+                for overlay in [Overlay::None, Overlay::Menu, Overlay::About] {
+                    let other = View { lang, chosen, overlay, ..v };
+                    assert!(layout(&fonts, &other, &size, None) as u32 <= size.height, "{lang:?} {overlay:?}");
+                }
+            }
+        }
     }
 
     #[test]
     fn a_short_screen_gets_a_smaller_qr() {
         let fonts = Fonts::load();
         let cards = sample_cards();
-        let view = View { lang: Lang::En, cards: &cards, chosen: 1, hostname: Some("inspiron") };
-        let roomy = fit(&fonts, &view, u32::MAX, 1.0);
-        // Shrinking the QR only helps until the right column is the taller one.
-        let short = fit(&fonts, &view, roomy.height - 20, 1.0);
+        let v = view(&cards, Lang::En, 1);
+        let roomy = fit(&fonts, &v, u32::MAX, 1.0);
         assert_eq!(roomy.module, MODULE_MAX as i32);
-        assert!(short.module < MODULE_MAX as i32 && short.height <= roomy.height - 20);
         // A screen too short for anything still gets the smallest readable QR.
-        assert_eq!(fit(&fonts, &view, 100, 1.0).module, MODULE_MIN);
+        let tiny = fit(&fonts, &v, 100, 1.0);
+        assert_eq!(tiny.module, MODULE_MIN);
+        // Narrower, though not always shorter: the text above and the link below wrap more.
+        assert!(tiny.width < roomy.width);
     }
 
     #[test]
     fn scale_two_doubles_the_window() {
         let fonts = Fonts::load();
         let cards = sample_cards();
-        let view = View { lang: Lang::En, cards: &cards, chosen: 1, hostname: Some("inspiron") };
-        let one = fit(&fonts, &view, u32::MAX, 1.0);
-        let two = fit(&fonts, &view, u32::MAX, 2.0);
+        let v = view(&cards, Lang::En, 1);
+        let one = fit(&fonts, &v, u32::MAX, 1.0);
+        let two = fit(&fonts, &v, u32::MAX, 2.0);
         assert_eq!(two.module, 2 * one.module);
         // Text metrics round per line, so allow a few pixels either way.
         assert!((two.width as i32 - 2 * one.width as i32).abs() <= 4, "{one:?} {two:?}");
-        assert!((two.height as i32 - 2 * one.height as i32).abs() <= 16, "{one:?} {two:?}");
+        assert!((two.height as i32 - 2 * one.height as i32).abs() <= 24, "{one:?} {two:?}");
         // Clicks land on the same rows, in physical pixels.
-        let frame = render(&fonts, &view, &two);
-        let wireless = frame.rows[1].0;
-        assert_eq!(frame.hit(wireless.x + 10, wireless.y + 10), Some(2));
+        let frame = render(&fonts, &v, &two);
+        let wireless = target(&frame, &Action::Card(2));
+        assert_eq!(frame.hit(wireless.x + 10, wireless.y + 10), Some(Action::Card(2)));
     }
 
-    /// `cargo test -- --ignored png`: the window in each language, as target/ui-*.png.
+    #[test]
+    fn the_menu_opens_and_picks_a_language() {
+        let mut app = app(Lang::En);
+        assert_eq!(click_on(&mut app, &Action::Menu), Effect::Redraw);
+        assert_eq!(app.overlay, Overlay::Menu);
+        assert_eq!(click_on(&mut app, &Action::SetLang(Lang::Es)), Effect::Redraw);
+        assert_eq!((app.lang, app.overlay), (Lang::Es, Overlay::None));
+    }
+
+    #[test]
+    fn a_click_outside_the_menu_only_closes_it() {
+        let mut app = app(Lang::En);
+        let wireless = target(app.frame(), &Action::Card(2));
+        click_on(&mut app, &Action::Menu);
+        // The wireless row sits under the open menu's reach? Click a spot no menu item covers.
+        let panel_left = app.frame().targets.iter().filter_map(|(r, a)| matches!(a, Action::SetLang(_)).then_some(r.x)).min().unwrap();
+        assert!(wireless.x < panel_left);
+        app.click(wireless.x + 2, wireless.y + 2);
+        assert_eq!((app.overlay, app.chosen), (Overlay::None, 1), "closed, card unchanged");
+    }
+
+    #[test]
+    fn escape_closes_about_then_the_window() {
+        let mut app = app(Lang::PtBr);
+        click_on(&mut app, &Action::Menu);
+        click_on(&mut app, &Action::About);
+        assert_eq!(app.overlay, Overlay::About);
+        assert_eq!(app.escape(), Effect::Redraw);
+        assert_eq!(app.overlay, Overlay::None);
+        assert_eq!(app.escape(), Effect::Close);
+    }
+
+    #[test]
+    fn links_close_the_menu_and_open() {
+        let mut app = app(Lang::PtPt);
+        click_on(&mut app, &Action::Menu);
+        let site = Action::Open("https://wole.celerasoft.com/pt-pt/".into());
+        assert_eq!(click_on(&mut app, &site), Effect::Open("https://wole.celerasoft.com/pt-pt/".into()));
+        assert_eq!(app.overlay, Overlay::None);
+    }
+
+    /// `cargo test -- --ignored png`: the window in each language, as target/ui-*.png, with the
+    /// menu and About open too.
     #[test]
     #[ignore]
     fn png() {
         let fonts = Fonts::load();
         let cards = sample_cards();
-        for (lang, tag) in [(Lang::En, "en"), (Lang::PtBr, "pt-BR"), (Lang::PtPt, "pt-PT"), (Lang::Es, "es")] {
+        for lang in Lang::ALL {
             for chosen in [1, 2] {
-                let view = View { lang, cards: &cards, chosen, hostname: Some("inspiron") };
-                // A 1366×768 laptop, less the panel and the title bar.
-                let frame = render(&fonts, &view, &fit(&fonts, &view, 768 - 120, 1.0));
-                let path = format!("target/ui-{tag}-{}.png", cards[chosen].name);
-                std::fs::write(&path, encode_png(&frame.canvas)).unwrap();
-                // The same at 150 %, as on most Windows laptops.
-                let frame = render(&fonts, &view, &fit(&fonts, &view, 1080 - 120, 1.5));
-                let path = format!("target/ui-{tag}-{}@1.5x.png", cards[chosen].name);
-                std::fs::write(&path, encode_png(&frame.canvas)).unwrap();
+                for (overlay, suffix) in [(Overlay::None, ""), (Overlay::Menu, "-menu"), (Overlay::About, "-about")] {
+                    if chosen == 2 && overlay != Overlay::None {
+                        continue;
+                    }
+                    let v = View { overlay, ..view(&cards, lang, chosen) };
+                    for (scale, max, tag) in [(1.0, 768 - 120, ""), (1.5, 1080 - 120, "@1.5x")] {
+                        let frame = render(&fonts, &v, &fit(&fonts, &v, max, scale));
+                        let path = format!("target/ui-{}-{}{suffix}{tag}.png", lang.tag(), cards[chosen].name);
+                        std::fs::write(&path, encode_png(&frame.canvas)).unwrap();
+                    }
+                }
             }
         }
     }

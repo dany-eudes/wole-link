@@ -2,11 +2,14 @@
 // borrows the terminal it was started from when there is something to print.
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+mod desktop;
 mod gui;
 mod i18n;
 mod link;
 mod net;
+mod open;
 mod qr;
+mod settings;
 mod ui;
 mod wordmark;
 
@@ -42,17 +45,21 @@ fn parse_args() -> Result<Args, String> {
 fn main() -> ExitCode {
     let code = run();
     if console::owns_window() {
-        let lang = parse_args().ok().and_then(|a| a.lang).unwrap_or_else(i18n::detect);
-        println!("\n{}", text(lang, Msg::PressEnter));
+        println!("\n{}", text(chosen_lang(parse_args().ok().and_then(|a| a.lang)), Msg::PressEnter));
         let _ = std::io::stdin().read_line(&mut String::new());
     }
     console::restore();
     code
 }
 
+/// `--lang`, else the one picked in the window's menu last time, else the system's.
+fn chosen_lang(flag: Option<Lang>) -> Lang {
+    flag.or_else(settings::saved_lang).unwrap_or_else(i18n::detect)
+}
+
 fn run() -> ExitCode {
     let args = parse_args();
-    let lang = args.as_ref().ok().and_then(|a| a.lang).unwrap_or_else(i18n::detect);
+    let lang = chosen_lang(args.as_ref().ok().and_then(|a| a.lang));
     let cards = net::list();
     let hostname = net::hostname();
 
@@ -66,8 +73,8 @@ fn run() -> ExitCode {
             };
             match chosen {
                 Some(chosen) => {
-                    let mut view = ui::View { lang, cards: &cards, chosen, hostname: hostname.as_deref() };
-                    match gui::run(&mut view) {
+                    let start = ui::Start { lang, cards: cards.clone(), chosen, hostname: hostname.clone() };
+                    match gui::run(start) {
                         Ok(()) => return ExitCode::SUCCESS,
                         // No display, or none we can use: the terminal still works.
                         Err(e) if std::env::var_os("WOLE_LINK_DEBUG").is_some() => {

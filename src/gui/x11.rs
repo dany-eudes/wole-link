@@ -2,7 +2,7 @@
 //! `ui` and switches card on a click.
 
 use super::Error;
-use crate::ui::{self, Fonts, Frame, View};
+use crate::ui::{self, App, Effect, Frame, Start};
 use std::borrow::Cow;
 use x11rb::connection::Connection;
 use x11rb::image::{BitsPerPixel, Image, ImageOrder, ScanlinePad};
@@ -20,18 +20,17 @@ const WM_ICON: &[u8] = include_bytes!("../../assets/icon/wm-icon.bin");
 /// Escape, on both the evdev and the old XFree86 keymaps.
 const KEY_ESCAPE: u8 = 9;
 
-pub fn run(view: &mut View) -> Result<(), Error> {
+pub fn run(start: Start) -> Result<(), Error> {
     let (conn, screen_num) = x11rb::connect(None)?;
     let screen = &conn.setup().roots[screen_num];
     if screen.root_depth != 24 && screen.root_depth != 32 {
         return Err(format!("unsupported depth {}", screen.root_depth).into());
     }
-    let fonts = Fonts::load();
     let scale = super::scale_override().unwrap_or_else(|| desktop_scale(&conn, screen.root));
     // Room for the desktop's panels and the title bar.
     let margin = (120.0 * scale) as u32;
-    let size = ui::fit(&fonts, view, (screen.height_in_pixels as u32).saturating_sub(margin), scale);
-    let (w, h) = (size.width as u16, size.height as u16);
+    let mut app = App::new(start, (screen.height_in_pixels as u32).saturating_sub(margin), scale);
+    let (w, h) = (app.size().width as u16, app.size().height as u16);
 
     let window = conn.generate_id()?;
     conn.create_window(
@@ -81,24 +80,22 @@ pub fn run(view: &mut View) -> Result<(), Error> {
     conn.map_window(window)?;
     conn.flush()?;
 
-    let mut frame = ui::render(&fonts, view, &size);
     loop {
-        match conn.wait_for_event()? {
-            Event::Expose(e) if e.count == 0 => show(&conn, window, gc, &frame)?,
-            Event::ButtonPress(e) if e.detail == 1 => {
-                if let Some(i) = frame.hit(e.event_x as i32, e.event_y as i32) {
-                    if i != view.chosen {
-                        view.chosen = i;
-                        frame = ui::render(&fonts, view, &size);
-                        show(&conn, window, gc, &frame)?;
-                    }
-                }
+        let effect = match conn.wait_for_event()? {
+            Event::Expose(e) if e.count == 0 => Effect::Redraw,
+            Event::ButtonPress(e) if e.detail == 1 => app.click(e.event_x as i32, e.event_y as i32),
+            Event::KeyPress(e) if e.detail == KEY_ESCAPE => app.escape(),
+            Event::ClientMessage(e) if e.format == 32 && e.data.as_data32()[0] == delete => Effect::Close,
+            _ => Effect::None,
+        };
+        match effect {
+            Effect::None => {}
+            Effect::Redraw => show(&conn, window, gc, app.frame())?,
+            Effect::Open(url) => {
+                crate::open::open(&url);
+                show(&conn, window, gc, app.frame())?;
             }
-            Event::KeyPress(e) if e.detail == KEY_ESCAPE => return Ok(()),
-            Event::ClientMessage(e) if e.format == 32 && e.data.as_data32()[0] == delete => {
-                return Ok(())
-            }
-            _ => {}
+            Effect::Close => return Ok(()),
         }
     }
 }

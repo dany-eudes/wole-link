@@ -19,6 +19,12 @@ Windows and Linux.
 Native window on Windows (Win32) and on Linux (X11, also under Wayland through XWayland), with an
 embedded font. With no display, it prints the QR in the terminal.
 
+The ☰ menu has the language (remembered in `~/.config/wole-link/settings.ini` or
+`%APPDATA%\wole-link\settings.ini`), About, links to the site, Google Play, Buy Me a Coffee and
+support, and on Linux "Add to the applications menu": GNOME only shows a program's icon in the
+dock when it has a `.desktop` entry, so this writes one (and the icon) under `~/.local/share`,
+and removes them again from the same menu.
+
 The window follows the screen's scale: `Xft.dpi` (and `GDK_SCALE`) on Linux, the display
 scale setting on Windows. `WOLE_LINK_SCALE=1.5` overrides it.
 

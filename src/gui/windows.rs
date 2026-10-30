@@ -2,9 +2,7 @@
 //! click.
 
 use super::Error;
-use crate::i18n::Lang;
-use crate::net::Card;
-use crate::ui::{self, Fonts, Frame, Size, View};
+use crate::ui::{self, App, Effect, Start};
 use std::cell::RefCell;
 use std::ptr::{null, null_mut};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
@@ -29,25 +27,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 const ICON_ID: *const u16 = 1 as *const u16;
 const STYLE: u32 = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
 
-/// What the window procedure needs; owned, since it lives in a thread-local.
-struct State {
-    fonts: Fonts,
-    lang: Lang,
-    cards: Vec<Card>,
-    hostname: Option<String>,
-    chosen: usize,
-    size: Size,
-    frame: Frame,
-}
-
-impl State {
-    fn view(&self) -> View<'_> {
-        View { lang: self.lang, cards: &self.cards, chosen: self.chosen, hostname: self.hostname.as_deref() }
-    }
-}
-
 thread_local! {
-    static STATE: RefCell<Option<State>> = const { RefCell::new(None) };
+    static STATE: RefCell<Option<App>> = const { RefCell::new(None) };
 }
 
 fn wide(s: &str) -> Vec<u16> {
@@ -74,7 +55,7 @@ fn system_scale() -> f32 {
     unsafe { GetDpiForSystem() as f32 / 96.0 }
 }
 
-pub fn run(view: &mut View) -> Result<(), Error> {
+pub fn run(start: Start) -> Result<(), Error> {
     dpi_aware();
     let scale = super::scale_override().unwrap_or_else(system_scale);
     // The work area leaves out the taskbar; the title bar comes off it too.
@@ -85,20 +66,9 @@ pub fn run(view: &mut View) -> Result<(), Error> {
         GetSystemMetrics(SM_CYCAPTION)
     };
     let max_height = (work.bottom - work.top - caption - (16.0 * scale) as i32).max(0) as u32;
-    let fonts = Fonts::load();
-    let size = ui::fit(&fonts, view, max_height, scale);
-    let frame = ui::render(&fonts, view, &size);
-    STATE.with(|s| {
-        *s.borrow_mut() = Some(State {
-            fonts,
-            lang: view.lang,
-            cards: view.cards.to_vec(),
-            hostname: view.hostname.map(str::to_string),
-            chosen: view.chosen,
-            size,
-            frame,
-        })
-    });
+    let app = App::new(start, max_height, scale);
+    let size = app.size();
+    STATE.with(|s| *s.borrow_mut() = Some(app));
 
     let class = wide("wole-link");
     let title = wide(ui::TITLE);
@@ -153,10 +123,26 @@ pub fn run(view: &mut View) -> Result<(), Error> {
             DispatchMessageW(&msg);
         }
     }
-    if let Some(state) = STATE.with(|s| s.borrow_mut().take()) {
-        view.chosen = state.chosen;
-    }
+    STATE.with(|s| s.borrow_mut().take());
     Ok(())
+}
+
+/// Carries out what a click asked for, with STATE no longer borrowed: opening a link and
+/// destroying the window can both come back into the window procedure.
+unsafe fn apply(hwnd: HWND, effect: Effect) {
+    match effect {
+        Effect::None => {}
+        Effect::Redraw => {
+            InvalidateRect(hwnd, null(), 0);
+        }
+        Effect::Open(url) => {
+            InvalidateRect(hwnd, null(), 0);
+            crate::open::open(&url);
+        }
+        Effect::Close => {
+            DestroyWindow(hwnd);
+        }
+    }
 }
 
 /// Borrows of STATE never span a call that can come back in here (DestroyWindow sends
@@ -167,8 +153,8 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             let mut ps: PAINTSTRUCT = std::mem::zeroed();
             let hdc = BeginPaint(hwnd, &mut ps);
             STATE.with(|s| {
-                if let Some(state) = s.borrow().as_ref() {
-                    let c = &state.frame.canvas;
+                if let Some(app) = s.borrow().as_ref() {
+                    let c = &app.frame().canvas;
                     let mut info: BITMAPINFO = std::mem::zeroed();
                     info.bmiHeader = BITMAPINFOHEADER {
                         biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
@@ -202,25 +188,13 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         }
         WM_LBUTTONDOWN => {
             let (x, y) = ((lparam & 0xFFFF) as i16 as i32, ((lparam >> 16) & 0xFFFF) as i16 as i32);
-            let changed = STATE.with(|s| {
-                let mut s = s.borrow_mut();
-                let Some(state) = s.as_mut() else { return false };
-                match state.frame.hit(x, y) {
-                    Some(i) if i != state.chosen => {
-                        state.chosen = i;
-                        state.frame = ui::render(&state.fonts, &state.view(), &state.size);
-                        true
-                    }
-                    _ => false,
-                }
-            });
-            if changed {
-                InvalidateRect(hwnd, null(), 0);
-            }
+            let effect = STATE.with(|s| s.borrow_mut().as_mut().map_or(Effect::None, |app| app.click(x, y)));
+            apply(hwnd, effect);
             0
         }
         WM_KEYDOWN if wparam == VK_ESCAPE as usize => {
-            DestroyWindow(hwnd);
+            let effect = STATE.with(|s| s.borrow_mut().as_mut().map_or(Effect::None, |app| app.escape()));
+            apply(hwnd, effect);
             0
         }
         WM_DESTROY => {

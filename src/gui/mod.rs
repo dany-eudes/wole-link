@@ -1,7 +1,7 @@
 //! The window. When it can't open (no display, an SSH session), `main` falls back to the QR in
 //! the terminal.
 
-use crate::ui::View;
+use crate::ui::Start;
 
 pub type Error = Box<dyn std::error::Error>;
 
@@ -17,13 +17,13 @@ mod x11;
 mod windows;
 
 #[cfg(all(unix, not(target_os = "macos")))]
-pub fn run(view: &mut View) -> Result<(), Error> {
-    x11::run(view)
+pub fn run(start: Start) -> Result<(), Error> {
+    x11::run(start)
 }
 
 #[cfg(windows)]
-pub fn run(view: &mut View) -> Result<(), Error> {
-    windows::run(view)
+pub fn run(start: Start) -> Result<(), Error> {
+    windows::run(start)
 }
 
 /// A message for when there's nothing to put in the window. Only where a double click leaves

@@ -4,6 +4,7 @@
 use crate::i18n::{text, Lang, Msg};
 use crate::link;
 use crate::net::{Card, Kind};
+use crate::wordmark;
 use fontdue::{Font, FontSettings};
 use qrcodegen::{QrCode, QrCodeEcc};
 
@@ -11,6 +12,8 @@ const REGULAR: &[u8] = include_bytes!("../assets/fonts/NotoSans-Regular.ttf");
 const BOLD: &[u8] = include_bytes!("../assets/fonts/NotoSans-Bold.ttf");
 
 pub const TITLE: &str = "WOL•E Link";
+/// The bottom of the wordmark's letters, in its own units (logo_wordmark.xml).
+const WORDMARK_BASELINE: f32 = 112.55;
 const PAD: i32 = 24;
 const GAP: i32 = 24;
 /// The right column: the link's data and the cards. The QR takes the left one.
@@ -175,11 +178,19 @@ fn layout(
         };
     }
 
-    // Title and what to do.
-    let title = Text::new(&fonts.bold, 24.0 * sc, TEXT);
-    draw!(|c| c.text(&title, pad, y, TITLE));
-    y += title.line_height();
-    y += px(4);
+    // The WOL•E wordmark, then "Link" on the wordmark's baseline.
+    let mark_height = 34.0 * sc;
+    let k = mark_height / wordmark::HEIGHT;
+    let mark_width = (wordmark::WIDTH * k).ceil() as i32;
+    let title = Text::new(&fonts.bold, 25.0 * sc, TEXT);
+    let baseline = y as f32 + WORDMARK_BASELINE * k;
+    draw!(|c| {
+        for (color, polygons) in wordmark::SHAPES {
+            c.fill(polygons, pad as f32, y as f32, k, *color);
+        }
+        c.text(&title, pad + mark_width + px(10), baseline.round() as i32 - title.ascent(), "Link");
+    });
+    y += mark_height.ceil() as i32 + px(6);
     let body = Text::new(&fonts.regular, 15.0 * sc, TEXT_SECONDARY);
     for line in body.wrap(&text(lang, Msg::Scan), inner) {
         draw!(|c| c.text(&body, pad, y, &line));
@@ -427,6 +438,62 @@ impl Canvas {
             for dx in -reach..=reach {
                 let d = ((dx * dx + dy * dy) as f32).sqrt();
                 self.blend(cx + dx, cy + dy, color, coverage(d).clamp(0.0, 1.0));
+            }
+        }
+    }
+
+    /// Fills polygons given in `k`-scaled units from (`ox`, `oy`), nonzero rule. Four sample rows
+    /// per pixel; across a row, each pixel gets the exact share of the span that covers it.
+    fn fill(&mut self, polygons: &[&[(f32, f32)]], ox: f32, oy: f32, k: f32, color: u32) {
+        const SUB: usize = 4;
+        let map = |&(x, y): &(f32, f32)| (ox + x * k, oy + y * k);
+        let points = || polygons.iter().flat_map(|p| p.iter()).map(map);
+        let (mut min_x, mut min_y, mut max_x, mut max_y) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for (x, y) in points() {
+            (min_x, min_y, max_x, max_y) = (min_x.min(x), min_y.min(y), max_x.max(x), max_y.max(y));
+        }
+        let x0 = (min_x.floor() as i32).max(0);
+        let x1 = (max_x.ceil() as i32).min(self.width as i32);
+        let y0 = (min_y.floor() as i32).max(0);
+        let y1 = (max_y.ceil() as i32).min(self.height as i32);
+        if x0 >= x1 || y0 >= y1 {
+            return;
+        }
+        let mut coverage = vec![0f32; (x1 - x0) as usize];
+        let mut crossings: Vec<(f32, i32)> = Vec::new();
+        for py in y0..y1 {
+            coverage.fill(0.0);
+            for s in 0..SUB {
+                let sy = py as f32 + (s as f32 + 0.5) / SUB as f32;
+                crossings.clear();
+                for poly in polygons {
+                    for i in 0..poly.len() {
+                        let ((ax, ay), (bx, by)) = (map(&poly[i]), map(&poly[(i + 1) % poly.len()]));
+                        if (ay <= sy) != (by <= sy) {
+                            crossings.push((ax + (sy - ay) * (bx - ax) / (by - ay), if by > ay { 1 } else { -1 }));
+                        }
+                    }
+                }
+                crossings.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let (mut winding, mut start) = (0, 0.0);
+                for &(x, dir) in &crossings {
+                    let before = winding;
+                    winding += dir;
+                    if before == 0 && winding != 0 {
+                        start = x;
+                    } else if before != 0 && winding == 0 {
+                        let (a, b) = (start.max(x0 as f32), x.min(x1 as f32));
+                        let mut px = a.floor() as i32;
+                        while (px as f32) < b {
+                            let overlap = b.min(px as f32 + 1.0) - a.max(px as f32);
+                            coverage[(px - x0) as usize] += overlap.max(0.0);
+                            px += 1;
+                        }
+                    }
+                }
+            }
+            for (i, c) in coverage.iter().enumerate() {
+                self.blend(x0 + i as i32, py, color, c / SUB as f32);
             }
         }
     }

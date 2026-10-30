@@ -8,6 +8,7 @@ mod link;
 mod net;
 mod qr;
 mod ui;
+mod wordmark;
 
 use i18n::{text, Lang, Msg};
 use net::{Card, Kind};

@@ -202,7 +202,7 @@ mod console {
     use windows_sys::Win32::System::Console::{
         AllocConsole, AttachConsole, GetConsoleMode, GetConsoleOutputCP, GetConsoleProcessList,
         GetStdHandle, SetConsoleMode, SetConsoleOutputCP, SetStdHandle, ATTACH_PARENT_PROCESS,
-        ENABLE_VIRTUAL_TERMINAL_PROCESSING, STD_ERROR_HANDLE, STD_HANDLE, STD_INPUT_HANDLE,
+        ENABLE_VIRTUAL_TERMINAL_PROCESSING, STD_ERROR_HANDLE, STD_INPUT_HANDLE,
         STD_OUTPUT_HANDLE,
     };
 
@@ -215,19 +215,20 @@ mod console {
     pub fn attach() {
         // SAFETY: console and handle calls on this process's own standard handles.
         unsafe {
-            let unset = |which: STD_HANDLE| {
+            let handles = [STD_OUTPUT_HANDLE, STD_ERROR_HANDLE, STD_INPUT_HANDLE];
+            // What `cmd` or PowerShell handed us (a file, a pipe) or nothing.
+            let given = handles.map(|which| {
                 let h = GetStdHandle(which);
-                h.is_null() || h == INVALID_HANDLE_VALUE
-            };
-            let (out, err, inp) = (unset(STD_OUTPUT_HANDLE), unset(STD_ERROR_HANDLE), unset(STD_INPUT_HANDLE));
+                (!h.is_null() && h != INVALID_HANDLE_VALUE).then_some(h)
+            });
             if AttachConsole(ATTACH_PARENT_PROCESS) == 0 {
                 AllocConsole();
             }
-            let open = |name: &str, access: u32| {
+            let open = |name: &str| {
                 let wide: Vec<u16> = name.encode_utf16().chain([0]).collect();
                 CreateFileW(
                     wide.as_ptr(),
-                    access,
+                    GENERIC_READ | GENERIC_WRITE,
                     FILE_SHARE_READ | FILE_SHARE_WRITE,
                     null(),
                     OPEN_EXISTING,
@@ -235,14 +236,15 @@ mod console {
                     std::ptr::null_mut(),
                 )
             };
-            if out {
-                SetStdHandle(STD_OUTPUT_HANDLE, open("CONOUT$", GENERIC_READ | GENERIC_WRITE));
+            // Attaching can point the standard handles at the console, `> cards.txt` included:
+            // put back what we were given, and the console only where there was nothing.
+            for (which, given) in handles.into_iter().zip(given) {
+                let console = if which == STD_INPUT_HANDLE { "CONIN$" } else { "CONOUT$" };
+                SetStdHandle(which, given.unwrap_or_else(|| open(console)));
             }
-            if err {
-                SetStdHandle(STD_ERROR_HANDLE, open("CONOUT$", GENERIC_READ | GENERIC_WRITE));
-            }
-            if inp {
-                SetStdHandle(STD_INPUT_HANDLE, open("CONIN$", GENERIC_READ | GENERIC_WRITE));
+            if std::env::var_os("WOLE_LINK_DEBUG").is_some() {
+                let [out, err, inp] = given.map(|h| h.is_some());
+                eprintln!("handles given: stdout {out}, stderr {err}, stdin {inp}");
             }
         }
     }

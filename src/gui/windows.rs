@@ -13,6 +13,9 @@ use windows_sys::Win32::Graphics::Gdi::{
     DIB_RGB_COLORS, PAINTSTRUCT,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::UI::HiDpi::{
+    GetDpiForSystem, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_SYSTEM_AWARE,
+};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::VK_ESCAPE;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
@@ -50,13 +53,28 @@ fn wide(s: &str) -> Vec<u16> {
 }
 
 pub fn message(text: &str) -> Result<(), Error> {
+    dpi_aware();
     let (text, title) = (wide(text), wide(ui::TITLE));
     // SAFETY: both strings are NUL-terminated and outlive the call.
     unsafe { MessageBoxW(null_mut(), text.as_ptr(), title.as_ptr(), MB_OK | MB_ICONWARNING) };
     Ok(())
 }
 
+/// Draws at the system's DPI instead of letting Windows stretch a 96-dpi bitmap (blurry text,
+/// QR modules on fractional pixels). Before any window, the message box included.
+fn dpi_aware() {
+    // SAFETY: a process-wide setting with no pointers; fails harmlessly if already set.
+    unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_SYSTEM_AWARE) };
+}
+
+fn system_scale() -> f32 {
+    // SAFETY: no arguments.
+    unsafe { GetDpiForSystem() as f32 / 96.0 }
+}
+
 pub fn run(view: &mut View) -> Result<(), Error> {
+    dpi_aware();
+    let scale = super::scale_override().unwrap_or_else(system_scale);
     // The work area leaves out the taskbar; the title bar comes off it too.
     let mut work = RECT { left: 0, top: 0, right: 0, bottom: 0 };
     // SAFETY: SPI_GETWORKAREA writes one RECT.
@@ -64,9 +82,9 @@ pub fn run(view: &mut View) -> Result<(), Error> {
         SystemParametersInfoW(SPI_GETWORKAREA, 0, (&mut work as *mut RECT).cast(), 0);
         GetSystemMetrics(SM_CYCAPTION)
     };
-    let max_height = (work.bottom - work.top - caption - 16).max(0) as u32;
+    let max_height = (work.bottom - work.top - caption - (16.0 * scale) as i32).max(0) as u32;
     let fonts = Fonts::load();
-    let size = ui::fit(&fonts, view, max_height);
+    let size = ui::fit(&fonts, view, max_height, scale);
     let frame = ui::render(&fonts, view, &size);
     STATE.with(|s| {
         *s.borrow_mut() = Some(State {

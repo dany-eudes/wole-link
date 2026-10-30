@@ -19,6 +19,9 @@ Windows and Linux.
 Native window on Windows (Win32) and on Linux (X11, also under Wayland through XWayland), with an
 embedded font. With no display, it prints the QR in the terminal.
 
+The window follows the screen's scale: `Xft.dpi` (and `GDK_SCALE`) on Linux, the display
+scale setting on Windows. `WOLE_LINK_SCALE=1.5` overrides it.
+
 Languages: English, Portuguese (Brazil), Portuguese (Portugal) and Spanish, the same as the app.
 
 ## Usage

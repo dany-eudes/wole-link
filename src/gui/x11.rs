@@ -25,8 +25,10 @@ pub fn run(view: &mut View) -> Result<(), Error> {
         return Err(format!("unsupported depth {}", screen.root_depth).into());
     }
     let fonts = Fonts::load();
+    let scale = super::scale_override().unwrap_or_else(|| desktop_scale(&conn, screen.root));
     // Room for the desktop's panels and the title bar.
-    let size = ui::fit(&fonts, view, (screen.height_in_pixels as u32).saturating_sub(120));
+    let margin = (120.0 * scale) as u32;
+    let size = ui::fit(&fonts, view, (screen.height_in_pixels as u32).saturating_sub(margin), scale);
     let (w, h) = (size.width as u16, size.height as u16);
 
     let window = conn.generate_id()?;
@@ -96,6 +98,26 @@ pub fn run(view: &mut View) -> Result<(), Error> {
     }
 }
 
+/// The desktop's scale: `Xft.dpi` from the X resources (what GNOME, KDE and XWayland set from
+/// the display and text scaling settings) over 96, times `GDK_SCALE` when set. 1 without them.
+fn desktop_scale(conn: &RustConnection, root: u32) -> f32 {
+    let dpi = conn
+        .get_property(false, root, AtomEnum::RESOURCE_MANAGER, AtomEnum::STRING, 0, 1 << 16)
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+        .and_then(|reply| xft_dpi(&String::from_utf8_lossy(&reply.value)))
+        .unwrap_or(96.0);
+    let gdk = std::env::var("GDK_SCALE").ok().and_then(|s| s.parse::<f32>().ok()).unwrap_or(1.0);
+    (dpi / 96.0 * gdk).max(1.0)
+}
+
+fn xft_dpi(resources: &str) -> Option<f32> {
+    resources
+        .lines()
+        .find_map(|line| line.strip_prefix("Xft.dpi:"))
+        .and_then(|v| v.trim().parse().ok())
+}
+
 /// Puts the frame on the window; x11rb converts the pixels to the server's format and splits
 /// the image into requests under the server's size limit.
 fn show(conn: &RustConnection, window: u32, gc: u32, frame: &Frame) -> Result<(), Error> {
@@ -113,4 +135,16 @@ fn show(conn: &RustConnection, window: u32, gc: u32, frame: &Frame) -> Result<()
     image.native(conn.setup())?.put(conn, window, gc, 0, 0)?;
     conn.flush()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::xft_dpi;
+
+    #[test]
+    fn dpi_from_x_resources() {
+        assert_eq!(xft_dpi("Xcursor.size:\t24\nXft.dpi:\t144\nXft.antialias:\t1"), Some(144.0));
+        assert_eq!(xft_dpi("Xft.dpi: 120.5"), Some(120.5));
+        assert_eq!(xft_dpi("Xcursor.size:\t24"), None);
+    }
 }

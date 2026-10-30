@@ -5,6 +5,12 @@ use crate::ui::View;
 
 pub type Error = Box<dyn std::error::Error>;
 
+/// `WOLE_LINK_SCALE=1.5` overrides the scale the system reports (for testing, or a desktop that
+/// reports none).
+fn scale_override() -> Option<f32> {
+    std::env::var("WOLE_LINK_SCALE").ok()?.parse().ok().filter(|s: &f32| s.is_finite() && *s > 0.0)
+}
+
 #[cfg(all(unix, not(target_os = "macos")))]
 mod x11;
 #[cfg(windows)]

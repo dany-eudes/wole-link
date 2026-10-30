@@ -25,8 +25,9 @@ pub fn run(view: &mut View) -> Result<(), Error> {
         return Err(format!("unsupported depth {}", screen.root_depth).into());
     }
     let fonts = Fonts::load();
-    let height = ui::height_for_all(&fonts, view);
-    let (w, h) = (ui::WIDTH as u16, height as u16);
+    // Room for the desktop's panels and the title bar.
+    let size = ui::fit(&fonts, view, (screen.height_in_pixels as u32).saturating_sub(120));
+    let (w, h) = (size.width as u16, size.height as u16);
 
     let window = conn.generate_id()?;
     conn.create_window(
@@ -73,7 +74,7 @@ pub fn run(view: &mut View) -> Result<(), Error> {
     conn.map_window(window)?;
     conn.flush()?;
 
-    let mut frame = ui::render(&fonts, view, height);
+    let mut frame = ui::render(&fonts, view, &size);
     loop {
         match conn.wait_for_event()? {
             Event::Expose(e) if e.count == 0 => show(&conn, window, gc, &frame)?,
@@ -81,7 +82,7 @@ pub fn run(view: &mut View) -> Result<(), Error> {
                 if let Some(i) = frame.hit(e.event_x as i32, e.event_y as i32) {
                     if i != view.chosen {
                         view.chosen = i;
-                        frame = ui::render(&fonts, view, height);
+                        frame = ui::render(&fonts, view, &size);
                         show(&conn, window, gc, &frame)?;
                     }
                 }

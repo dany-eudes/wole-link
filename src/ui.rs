@@ -11,9 +11,15 @@ const REGULAR: &[u8] = include_bytes!("../assets/fonts/NotoSans-Regular.ttf");
 const BOLD: &[u8] = include_bytes!("../assets/fonts/NotoSans-Bold.ttf");
 
 pub const TITLE: &str = "WOL•E Link";
-pub const WIDTH: u32 = 460;
 const PAD: i32 = 24;
-const INNER: i32 = WIDTH as i32 - 2 * PAD;
+const GAP: i32 = 24;
+/// The right column: the link's data and the cards. The QR takes the left one.
+const RIGHT: i32 = 360;
+/// Pixels per QR module: the largest that keeps the window on the screen, down to the smallest
+/// a phone still reads comfortably off a screen.
+const MODULE_MAX: i32 = 7;
+const MODULE_MIN: i32 = 3;
+const QR_ECC: QrCodeEcc = QrCodeEcc::Medium;
 
 // The app's light palette (ui/theme/Color.kt), as 0xRRGGBB.
 const BACKGROUND: u32 = 0xF4F6F9;
@@ -93,28 +99,61 @@ pub fn device(card: &Card, hostname: Option<&str>) -> link::Device {
     }
 }
 
-/// The window's height: the tallest of the views for every card the user can click, so the
-/// window doesn't change size when the Wi-Fi warning comes and goes.
-pub fn height_for_all(fonts: &Fonts, view: &View) -> u32 {
-    (0..view.cards.len())
-        .filter(|&i| view.cards[i].usable())
-        .map(|i| layout(fonts, &View { chosen: i, ..*view }, None))
-        .max()
-        .unwrap_or(0) as u32
+/// The window's size and the QR's scale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Size {
+    pub width: u32,
+    pub height: u32,
+    module: i32,
+    qr_side: i32,
 }
 
-pub fn render(fonts: &Fonts, view: &View, height: u32) -> Frame {
-    let mut canvas = Canvas::new(WIDTH, height, BACKGROUND);
+/// The largest QR that keeps the window within `max_height`. The height is the tallest view
+/// among the cards the user can click, so the window doesn't change size when the Wi-Fi warning
+/// comes and goes.
+pub fn fit(fonts: &Fonts, view: &View, max_height: u32) -> Size {
+    let usable: Vec<usize> = (0..view.cards.len()).filter(|&i| view.cards[i].usable()).collect();
+    let modules = usable
+        .iter()
+        .filter_map(|&i| QrCode::encode_text(&link::build(&device(&view.cards[i], view.hostname)), QR_ECC).ok())
+        .map(|qr| qr.size() + 8)
+        .max()
+        .unwrap_or(0);
+    let mut size = Size { width: 0, height: 0, module: MODULE_MAX, qr_side: 0 };
+    for module in (MODULE_MIN..=MODULE_MAX).rev() {
+        let qr_side = modules * module;
+        size = Size { width: (2 * PAD + qr_side + GAP + RIGHT) as u32, height: 0, module, qr_side };
+        size.height = usable
+            .iter()
+            .map(|&i| layout(fonts, &View { chosen: i, ..*view }, &size, None))
+            .max()
+            .unwrap_or(0) as u32;
+        if size.height <= max_height {
+            break;
+        }
+    }
+    size
+}
+
+pub fn render(fonts: &Fonts, view: &View, size: &Size) -> Frame {
+    let mut canvas = Canvas::new(size.width, size.height, BACKGROUND);
     let mut rows = Vec::new();
-    layout(fonts, view, Some((&mut canvas, &mut rows)));
+    layout(fonts, view, size, Some((&mut canvas, &mut rows)));
     Frame { canvas, rows }
 }
 
-/// Lays the view out top to bottom and returns its height; draws it too when given a canvas.
-fn layout(fonts: &Fonts, view: &View, mut target: Option<(&mut Canvas, &mut Vec<(Rect, usize)>)>) -> i32 {
+/// Title on top; QR on the left, data and cards on the right; the link at the bottom. Returns
+/// the height, and draws too when given a canvas.
+fn layout(
+    fonts: &Fonts,
+    view: &View,
+    size: &Size,
+    mut target: Option<(&mut Canvas, &mut Vec<(Rect, usize)>)>,
+) -> i32 {
     let lang = view.lang;
     let card = &view.cards[view.chosen];
     let url = link::build(&device(card, view.hostname));
+    let inner = size.width as i32 - 2 * PAD;
     let mut y = PAD;
 
     macro_rules! draw {
@@ -132,34 +171,35 @@ fn layout(fonts: &Fonts, view: &View, mut target: Option<(&mut Canvas, &mut Vec<
     y += title.line_height();
     y += 4;
     let body = Text::new(&fonts.regular, 15.0, TEXT_SECONDARY);
-    for line in body.wrap(&text(lang, Msg::Scan), INNER) {
+    for line in body.wrap(&text(lang, Msg::Scan), inner) {
         draw!(|c| c.text(&body, PAD, y, &line));
         y += body.line_height();
     }
-    y += 14;
+    y += 16;
+    let top = y;
 
-    // The QR on a white panel; its quiet zone is part of the panel.
-    if let Ok(qr) = QrCode::encode_text(&url, QrCodeEcc::Medium) {
-        let modules = qr.size() + 8;
-        let module = (INNER / modules).max(1);
-        let side = modules * module;
-        let x0 = PAD + (INNER - side) / 2;
+    // Left: the QR on a white panel; its quiet zone is part of the panel.
+    if let Ok(qr) = QrCode::encode_text(&url, QR_ECC) {
+        let (module, side) = (size.module, size.qr_side);
+        // A shorter link can make a smaller code than the one the window was sized for.
+        let offset = (side - (qr.size() + 8) * module) / 2;
         draw!(|c| {
-            c.rect(PAD, y, INNER, side, SURFACE);
-            c.outline(PAD, y, INNER, side, BORDER);
+            c.rect(PAD, top, side, side, SURFACE);
+            c.outline(PAD, top, side, side, BORDER);
             for my in 0..qr.size() {
                 for mx in 0..qr.size() {
                     if qr.get_module(mx, my) {
-                        c.rect(x0 + (mx + 4) * module, y + (my + 4) * module, module, module, QR_DARK);
+                        let (px, py) = ((mx + 4) * module + offset, (my + 4) * module + offset);
+                        c.rect(PAD + px, top + py, module, module, QR_DARK);
                     }
                 }
             }
         });
-        y += side;
     }
-    y += 14;
+    let left_bottom = top + size.qr_side;
 
-    // The data in the link, with the app's form labels.
+    // Right: the data in the link, with the app's form labels.
+    let x = PAD + size.qr_side + GAP;
     let label = Text::new(&fonts.regular, 13.0, TEXT_SECONDARY);
     let value = Text::new(&fonts.bold, 14.0, TEXT);
     let d = device(card, view.hostname);
@@ -174,14 +214,14 @@ fn layout(fonts: &Fonts, view: &View, mut target: Option<(&mut Canvas, &mut Vec<
     .filter_map(|(msg, v)| v.map(|v| (text(lang, msg), v)))
     .collect();
     let label_width = fields.iter().map(|(l, _)| label.width(l)).max().unwrap_or(0) + 16;
+    let mut y = top;
     for (l, v) in &fields {
-        let row = value.line_height();
         draw!(|c| {
             // Labels are smaller: line their baseline up with the value's.
-            c.text(&label, PAD, y + value.ascent() - label.ascent(), l);
-            c.text(&value, PAD + label_width, y, v);
+            c.text(&label, x, y + value.ascent() - label.ascent(), l);
+            c.text(&value, x + label_width, y, v);
         });
-        y += row + 2;
+        y += value.line_height() + 2;
     }
 
     // Wake-on-LAN over Wi-Fi rarely works: say so whenever a Wi-Fi card is chosen.
@@ -190,12 +230,12 @@ fn layout(fonts: &Fonts, view: &View, mut target: Option<(&mut Canvas, &mut Vec<
         let warning = Text::new(&fonts.regular, 13.0, WARNING_TEXT);
         let wired_too = view.cards.iter().any(|c| c.kind == Kind::Wired && c.usable());
         let msg = if wired_too { Msg::WirelessChosen } else { Msg::WirelessWarning };
-        let lines = warning.wrap(&text(lang, msg), INNER - 24);
+        let lines = warning.wrap(&text(lang, msg), RIGHT - 24);
         let h = lines.len() as i32 * warning.line_height() + 20;
         draw!(|c| {
-            c.rect(PAD, y, INNER, h, WARNING_BACKGROUND);
+            c.rect(x, y, RIGHT, h, WARNING_BACKGROUND);
             for (i, line) in lines.iter().enumerate() {
-                c.text(&warning, PAD + 12, y + 10 + i as i32 * warning.line_height(), line);
+                c.text(&warning, x + 12, y + 10 + i as i32 * warning.line_height(), line);
             }
         });
         y += h;
@@ -204,7 +244,7 @@ fn layout(fonts: &Fonts, view: &View, mut target: Option<(&mut Canvas, &mut Vec<
 
     // The physical cards; virtual ones only show in --list.
     let header = Text::new(&fonts.bold, 15.0, TEXT);
-    draw!(|c| c.text(&header, PAD, y, &text(lang, Msg::Cards)));
+    draw!(|c| c.text(&header, x, y, &text(lang, Msg::Cards)));
     y += header.line_height() + 6;
     let suggested = crate::net::suggest(view.cards);
     for (i, card) in view.cards.iter().enumerate() {
@@ -218,7 +258,7 @@ fn layout(fonts: &Fonts, view: &View, mut target: Option<(&mut Canvas, &mut Vec<
         let detail = Text::new(&fonts.regular, 12.5, fg2);
         let tag = Text::new(&fonts.regular, 12.5, ACCENT);
         let h = name.line_height() + detail.line_height() + 16;
-        let rect = Rect { x: PAD, y, w: INNER, h };
+        let rect = Rect { x, y, w: RIGHT, h };
         let kind = text(lang, if card.kind == Kind::Wired { Msg::Wired } else { Msg::Wireless });
         let mut second = card.mac.map(|m| link::format_mac(&m)).unwrap_or_default();
         let state = match (card.up, card.ipv4) {
@@ -236,25 +276,25 @@ fn layout(fonts: &Fonts, view: &View, mut target: Option<(&mut Canvas, &mut Vec<
             if chosen {
                 c.disc(cx, cy, 3.6, ACCENT);
             }
-            let x = rect.x + 40;
+            let tx = rect.x + 40;
             let first = format!("{}  [{kind}]", card.name);
-            c.text(&name, x, rect.y + 8, &first);
+            c.text(&name, tx, rect.y + 8, &first);
             if Some(i) == suggested {
-                let after = x + name.width(&first) + 8;
+                let after = tx + name.width(&first) + 8;
                 c.text(&tag, after, rect.y + 8 + name.ascent() - tag.ascent(), &text(lang, Msg::Suggested));
             }
-            c.text(&detail, x, rect.y + 8 + name.line_height(), &second);
+            c.text(&detail, tx, rect.y + 8 + name.line_height(), &second);
             if usable {
                 rows.push((rect, i));
             }
         }
         y += h + 8;
     }
-    y += 6;
+    let mut y = y.max(left_bottom) + 14;
 
     // The link itself, for reading it off the screen or comparing with what the phone read.
     let small = Text::new(&fonts.regular, 11.0, TEXT_SECONDARY);
-    for line in small.wrap(&url, INNER) {
+    for line in small.wrap(&url, inner) {
         draw!(|c| c.text(&small, PAD, y, &line));
         y += small.line_height();
     }
@@ -465,7 +505,7 @@ mod tests {
         let fonts = Fonts::load();
         let cards = sample_cards();
         let view = View { lang: Lang::En, cards: &cards, chosen: 1, hostname: Some("inspiron") };
-        let frame = render(&fonts, &view, height_for_all(&fonts, &view));
+        let frame = render(&fonts, &view, &fit(&fonts, &view, u32::MAX));
         let (wired, wireless) = (frame.rows[0].0, frame.rows[1].0);
         assert_eq!(frame.rows.len(), 2, "loopback has no row");
         assert_eq!(frame.hit(wireless.x + 5, wireless.y + 5), Some(2));
@@ -479,9 +519,23 @@ mod tests {
         let cards = sample_cards();
         let wired = View { lang: Lang::PtPt, cards: &cards, chosen: 1, hostname: None };
         let wireless = View { chosen: 2, ..wired };
-        let height = height_for_all(&fonts, &wired);
-        assert!(layout(&fonts, &wireless, None) > layout(&fonts, &wired, None));
-        assert_eq!(height, layout(&fonts, &wireless, None) as u32);
+        let size = fit(&fonts, &wired, u32::MAX);
+        assert!(layout(&fonts, &wireless, &size, None) >= layout(&fonts, &wired, &size, None));
+        assert_eq!(size.height, layout(&fonts, &wireless, &size, None) as u32);
+    }
+
+    #[test]
+    fn a_short_screen_gets_a_smaller_qr() {
+        let fonts = Fonts::load();
+        let cards = sample_cards();
+        let view = View { lang: Lang::En, cards: &cards, chosen: 1, hostname: Some("inspiron") };
+        let roomy = fit(&fonts, &view, u32::MAX);
+        // Shrinking the QR only helps until the right column is the taller one.
+        let short = fit(&fonts, &view, roomy.height - 20);
+        assert_eq!(roomy.module, MODULE_MAX);
+        assert!(short.module < MODULE_MAX && short.height <= roomy.height - 20);
+        // A screen too short for anything still gets the smallest readable QR.
+        assert_eq!(fit(&fonts, &view, 100).module, MODULE_MIN);
     }
 
     /// `cargo test -- --ignored png`: the window in each language, as target/ui-*.png.
@@ -493,7 +547,8 @@ mod tests {
         for (lang, tag) in [(Lang::En, "en"), (Lang::PtBr, "pt-BR"), (Lang::PtPt, "pt-PT"), (Lang::Es, "es")] {
             for chosen in [1, 2] {
                 let view = View { lang, cards: &cards, chosen, hostname: Some("inspiron") };
-                let frame = render(&fonts, &view, height_for_all(&fonts, &view));
+                // A 1366×768 laptop, less the panel and the title bar.
+                let frame = render(&fonts, &view, &fit(&fonts, &view, 768 - 120));
                 let path = format!("target/ui-{tag}-{}.png", cards[chosen].name);
                 std::fs::write(&path, encode_png(&frame.canvas)).unwrap();
             }

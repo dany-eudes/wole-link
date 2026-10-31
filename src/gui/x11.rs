@@ -46,7 +46,13 @@ pub fn run(start: Start) -> Result<(), Error> {
         0,
         &CreateWindowAux::new()
             .background_pixel(screen.white_pixel)
-            .event_mask(EventMask::EXPOSURE | EventMask::BUTTON_PRESS | EventMask::KEY_PRESS),
+            .event_mask(
+                EventMask::EXPOSURE
+                    | EventMask::BUTTON_PRESS
+                    | EventMask::KEY_PRESS
+                    | EventMask::POINTER_MOTION
+                    | EventMask::LEAVE_WINDOW,
+            ),
     )?;
     let atom = |name: &[u8]| -> Result<u32, Error> { Ok(conn.intern_atom(false, name)?.reply()?.atom) };
     let (protocols, delete) = (atom(b"WM_PROTOCOLS")?, atom(b"WM_DELETE_WINDOW")?);
@@ -84,6 +90,8 @@ pub fn run(start: Start) -> Result<(), Error> {
         let effect = match conn.wait_for_event()? {
             Event::Expose(e) if e.count == 0 => Effect::Redraw,
             Event::ButtonPress(e) if e.detail == 1 => app.click(e.event_x as i32, e.event_y as i32),
+            Event::MotionNotify(e) => app.pointer(Some((e.event_x as i32, e.event_y as i32))),
+            Event::LeaveNotify(_) => app.pointer(None),
             Event::KeyPress(e) if e.detail == KEY_ESCAPE => app.escape(),
             Event::ClientMessage(e) if e.format == 32 && e.data.as_data32()[0] == delete => Effect::Close,
             _ => Effect::None,

@@ -3,7 +3,7 @@
 
 use super::Error;
 use crate::ui::{self, App, Effect, Start};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ptr::{null, null_mut};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
@@ -14,21 +14,27 @@ use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::HiDpi::{
     GetDpiForSystem, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_SYSTEM_AWARE,
 };
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::VK_ESCAPE;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_ESCAPE};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
     GetMessageW, GetSystemMetrics, LoadCursorW, LoadIconW, LoadImageW, MessageBoxW, SendMessageW,
     ICON_SMALL, IMAGE_ICON, LR_DEFAULTCOLOR, SM_CXSMICON, SM_CYSMICON, WM_SETICON, PostQuitMessage, RegisterClassW,
     SystemParametersInfoW, TranslateMessage, CW_USEDEFAULT, IDC_ARROW, MB_ICONWARNING, MB_OK, MSG,
-    SM_CYCAPTION, SPI_GETWORKAREA, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONDOWN, WM_PAINT, WNDCLASSW,
+    SM_CYCAPTION, SPI_GETWORKAREA, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_PAINT,
+    WNDCLASSW,
     WS_CAPTION, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU,
 };
 
 const ICON_ID: *const u16 = 1 as *const u16;
+/// windows-sys files this one under Win32_UI_Controls, a whole feature for one number.
+const WM_MOUSELEAVE: u32 = 0x02A3;
 const STYLE: u32 = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
 
 thread_local! {
     static STATE: RefCell<Option<App>> = const { RefCell::new(None) };
+    /// Whether Windows will tell us when the pointer leaves the window (asked for again after
+    /// each time it does).
+    static TRACKING: Cell<bool> = const { Cell::new(false) };
 }
 
 fn wide(s: &str) -> Vec<u16> {
@@ -145,6 +151,11 @@ unsafe fn apply(hwnd: HWND, effect: Effect) {
     }
 }
 
+/// The client coordinates packed in a mouse message.
+fn point(lparam: LPARAM) -> (i32, i32) {
+    ((lparam & 0xFFFF) as i16 as i32, ((lparam >> 16) & 0xFFFF) as i16 as i32)
+}
+
 /// Borrows of STATE never span a call that can come back in here (DestroyWindow sends
 /// WM_DESTROY right away), and the state may be missing while the window is being created.
 unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -186,8 +197,29 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             EndPaint(hwnd, &ps);
             0
         }
+        WM_MOUSEMOVE => {
+            if !TRACKING.get() {
+                let mut track = TRACKMOUSEEVENT {
+                    cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                    dwFlags: TME_LEAVE,
+                    hwndTrack: hwnd,
+                    dwHoverTime: 0,
+                };
+                TRACKING.set(TrackMouseEvent(&mut track) != 0);
+            }
+            let at = point(lparam);
+            let effect = STATE.with(|s| s.borrow_mut().as_mut().map_or(Effect::None, |app| app.pointer(Some(at))));
+            apply(hwnd, effect);
+            0
+        }
+        WM_MOUSELEAVE => {
+            TRACKING.set(false);
+            let effect = STATE.with(|s| s.borrow_mut().as_mut().map_or(Effect::None, |app| app.pointer(None)));
+            apply(hwnd, effect);
+            0
+        }
         WM_LBUTTONDOWN => {
-            let (x, y) = ((lparam & 0xFFFF) as i16 as i32, ((lparam >> 16) & 0xFFFF) as i16 as i32);
+            let (x, y) = point(lparam);
             let effect = STATE.with(|s| s.borrow_mut().as_mut().map_or(Effect::None, |app| app.click(x, y)));
             apply(hwnd, effect);
             0

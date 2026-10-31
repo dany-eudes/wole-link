@@ -3,6 +3,7 @@
 //! `Effect` it returns.
 
 use crate::i18n::{text, Lang, Msg};
+use crate::icons::{self, Icon};
 use crate::link;
 use crate::net::{Card, Kind};
 use crate::wordmark;
@@ -35,6 +36,14 @@ const DISABLED: u32 = 0x94A3B8;
 const WARNING_BACKGROUND: u32 = 0xFFF4E0;
 const WARNING_TEXT: u32 = 0x6B4500;
 const QR_DARK: u32 = 0x000000;
+// Under the pointer: a menu row or ☰, a card that isn't the chosen one, the About button.
+const HOVER: u32 = 0xE8EEF4;
+const CARD_HOVER: u32 = 0xF0F7FA;
+const CARD_HOVER_BORDER: u32 = 0x8CC3D3;
+const ACCENT_HOVER: u32 = 0x0B6E8B;
+/// Corner radii, as in Windows 11: panels and cards, then buttons and menu rows.
+const RADIUS: f32 = 8.0;
+const RADIUS_SMALL: f32 = 4.0;
 
 pub struct Fonts {
     regular: Font,
@@ -101,6 +110,11 @@ impl Frame {
     pub fn hit(&self, x: i32, y: i32) -> Option<Action> {
         self.targets.iter().find(|(r, _)| r.contains(x, y)).map(|(_, a)| a.clone())
     }
+
+    /// The area a click at (`x`, `y`) would land on.
+    fn target_at(&self, x: i32, y: i32) -> Option<Rect> {
+        self.targets.iter().find(|(r, _)| r.contains(x, y)).map(|(r, _)| *r)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -113,6 +127,8 @@ pub struct View<'a> {
     pub overlay: Overlay,
     /// The Linux applications-menu entry; `None` where there is no such thing (Windows).
     pub desktop: Option<crate::desktop::State>,
+    /// The click target under the pointer, drawn highlighted.
+    pub hover: Option<Rect>,
 }
 
 /// What the window must do after a click or Esc.
@@ -133,6 +149,9 @@ pub struct App {
     hostname: Option<String>,
     overlay: Overlay,
     desktop: Option<crate::desktop::State>,
+    /// Where the pointer is over the window, and the click target it is on.
+    pointer: Option<(i32, i32)>,
+    hover: Option<Rect>,
     size: Size,
     frame: Frame,
 }
@@ -149,6 +168,7 @@ impl App {
             hostname: start.hostname.as_deref(),
             overlay: Overlay::None,
             desktop,
+            hover: None,
         };
         let size = fit(&fonts, &view, max_height, scale);
         let frame = render(&fonts, &view, &size);
@@ -160,6 +180,8 @@ impl App {
             hostname: start.hostname,
             overlay: Overlay::None,
             desktop,
+            pointer: None,
+            hover: None,
             size,
             frame,
         }
@@ -181,15 +203,42 @@ impl App {
             hostname: self.hostname.as_deref(),
             overlay: self.overlay,
             desktop: self.desktop,
+            hover: self.hover,
         }
     }
 
+    /// A click can move what lies under the pointer (the menu opens over the cards): the
+    /// highlight follows in the same redraw.
     fn redraw(&mut self) -> Effect {
+        self.frame = render(&self.fonts, &self.view(), &self.size);
+        let hover = self.hovered();
+        if hover != self.hover {
+            self.hover = hover;
+            self.frame = render(&self.fonts, &self.view(), &self.size);
+        }
+        Effect::Redraw
+    }
+
+    fn hovered(&self) -> Option<Rect> {
+        self.pointer.and_then(|(x, y)| self.frame.target_at(x, y))
+    }
+
+    /// The pointer moved to (`x`, `y`), or left the window with `None`. Redraws only when it
+    /// crosses into another click target.
+    pub fn pointer(&mut self, at: Option<(i32, i32)>) -> Effect {
+        self.pointer = at;
+        let hover = self.hovered();
+        if hover == self.hover {
+            return Effect::None;
+        }
+        self.hover = hover;
         self.frame = render(&self.fonts, &self.view(), &self.size);
         Effect::Redraw
     }
 
     pub fn click(&mut self, x: i32, y: i32) -> Effect {
+        // A touch screen clicks without moving the pointer first.
+        self.pointer = Some((x, y));
         let Some(action) = self.frame.hit(x, y) else { return Effect::None };
         match action {
             Action::Card(i) if i == self.chosen => Effect::None,
@@ -365,8 +414,8 @@ fn layout(fonts: &Fonts, view: &View, size: &Size, mut target: Target) -> i32 {
         // A shorter link can make a smaller code than the one the window was sized for.
         let offset = (side - (qr.size() + 8) * module) / 2;
         draw!(|c| {
-            c.rect(pad, top, side, side, SURFACE);
-            c.outline(pad, top, side, side, BORDER);
+            c.round_rect(pad, top, side, side, RADIUS * sc, SURFACE, 1.0);
+            c.round_outline(pad, top, side, side, RADIUS * sc, BORDER);
             for my in 0..qr.size() {
                 for mx in 0..qr.size() {
                     if qr.get_module(mx, my) {
@@ -414,7 +463,7 @@ fn layout(fonts: &Fonts, view: &View, size: &Size, mut target: Target) -> i32 {
         let lines = warning.wrap(&text(lang, msg), right - px(24));
         let h = lines.len() as i32 * warning.line_height() + px(20);
         draw!(|c| {
-            c.rect(x, y, right, h, WARNING_BACKGROUND);
+            c.round_rect(x, y, right, h, RADIUS * sc, WARNING_BACKGROUND, 1.0);
             for (i, line) in lines.iter().enumerate() {
                 c.text(&warning, x + px(12), y + px(10) + i as i32 * warning.line_height(), line);
             }
@@ -450,8 +499,14 @@ fn layout(fonts: &Fonts, view: &View, size: &Size, mut target: Target) -> i32 {
         second = if second.is_empty() { state } else { format!("{second}  ·  {state}") };
         if let Some((canvas, rows)) = target.as_mut() {
             let c: &mut Canvas = canvas;
-            c.rect(rect.x, rect.y, rect.w, rect.h, if chosen { SELECTED } else { SURFACE });
-            c.outline(rect.x, rect.y, rect.w, rect.h, if chosen { ACCENT } else { BORDER });
+            let hovered = usable && !chosen && view.hover == Some(rect);
+            let (fill, border) = match (chosen, hovered) {
+                (true, _) => (SELECTED, ACCENT),
+                (false, true) => (CARD_HOVER, CARD_HOVER_BORDER),
+                (false, false) => (SURFACE, BORDER),
+            };
+            c.round_rect(rect.x, rect.y, rect.w, rect.h, RADIUS * sc, fill, 1.0);
+            c.round_outline(rect.x, rect.y, rect.w, rect.h, RADIUS * sc, border);
             let (cx, cy) = (rect.x + px(20), rect.y + h / 2);
             c.ring(cx, cy, 7.0 * sc, 1.6 * sc, if usable { ACCENT } else { DISABLED });
             if chosen {
@@ -486,11 +541,16 @@ fn layout(fonts: &Fonts, view: &View, size: &Size, mut target: Target) -> i32 {
     }
     let mut height = y + pad;
 
-    // ☰: three bars, highlighted while the menu is open.
+    // ☰: three bars, highlighted while the menu is open or under the pointer.
     if let Some((c, targets)) = target.as_mut() {
         let b = menu_button;
-        if view.overlay == Overlay::Menu {
-            c.rect(b.x, b.y, b.w, b.h, SELECTED);
+        let fill = if view.overlay == Overlay::Menu {
+            Some(SELECTED)
+        } else {
+            (view.hover == Some(b)).then_some(HOVER)
+        };
+        if let Some(fill) = fill {
+            c.round_rect(b.x, b.y, b.w, b.h, RADIUS_SMALL * sc, fill, 1.0);
         }
         let (bar_w, bar_h) = (px(18), px(2).max(2));
         for i in -1..=1 {
@@ -531,27 +591,29 @@ const SUPPORT_MAIL: &str = "mailto:celeraman@gmail.com?subject=WOL%E2%80%A2E%20L
 pub const COPYRIGHT: &str = "© 2026 @celeraman";
 
 enum Item {
-    Heading(String),
+    Heading(String, Icon),
     Choice(String, bool, Action),
-    Entry(String, Action),
+    Entry(String, Icon, Action),
     Separator,
 }
 
-/// The drop-down under ☰, right-aligned with it. Returns its bottom.
+/// The drop-down under ☰, right-aligned with it: the languages; About, the one thing that opens
+/// in here; the links out; on Linux, the applications-menu entry. Returns its bottom.
 fn menu(fonts: &Fonts, view: &View, size: &Size, button: Rect, target: &mut Target) -> i32 {
     let lang = view.lang;
     let sc = size.scale;
     let px = |v: i32| (v as f32 * sc).round() as i32;
-    let mut items = vec![Item::Heading(text(lang, Msg::MenuLanguage))];
+    let mut items = vec![Item::Heading(text(lang, Msg::MenuLanguage), Icon::Globe)];
     for l in Lang::ALL {
         items.push(Item::Choice(l.native_name().into(), l == lang, Action::SetLang(l)));
     }
     items.push(Item::Separator);
-    items.push(Item::Entry(text(lang, Msg::MenuAbout), Action::About));
-    items.push(Item::Entry(text(lang, Msg::MenuSite), Action::Open(site_url(lang))));
-    items.push(Item::Entry(text(lang, Msg::MenuPlay), Action::Open(play_url(lang))));
-    items.push(Item::Entry(text(lang, Msg::MenuCoffee), Action::Open(COFFEE_URL.into())));
-    items.push(Item::Entry(text(lang, Msg::MenuContact), Action::Open(SUPPORT_MAIL.into())));
+    items.push(Item::Entry(text(lang, Msg::MenuAbout), Icon::Info, Action::About));
+    items.push(Item::Separator);
+    items.push(Item::Entry(text(lang, Msg::MenuSite), Icon::External, Action::Open(site_url(lang))));
+    items.push(Item::Entry(text(lang, Msg::MenuPlay), Icon::Play, Action::Open(play_url(lang))));
+    items.push(Item::Entry(text(lang, Msg::MenuCoffee), Icon::Coffee, Action::Open(COFFEE_URL.into())));
+    items.push(Item::Entry(text(lang, Msg::MenuContact), Icon::Mail, Action::Open(SUPPORT_MAIL.into())));
     if let Some(state) = view.desktop {
         let msg = match state {
             crate::desktop::State::Missing => Msg::MenuAddEntry,
@@ -559,17 +621,18 @@ fn menu(fonts: &Fonts, view: &View, size: &Size, button: Rect, target: &mut Targ
             crate::desktop::State::Moved => Msg::MenuUpdateEntry,
         };
         items.push(Item::Separator);
-        items.push(Item::Entry(text(lang, msg), Action::DesktopEntry));
+        items.push(Item::Entry(text(lang, msg), Icon::Apps, Action::DesktopEntry));
     }
 
     let entry = Text::new(&fonts.regular, 14.0 * sc, TEXT);
     let heading = Text::new(&fonts.bold, 12.0 * sc, TEXT_SECONDARY);
-    let (row, indent) = (px(32), px(36));
+    // Icons and the ✓ share a column; every text starts at `indent`.
+    let (row, indent, icon_x) = (px(32), px(44), px(24));
     let width = items
         .iter()
         .map(|item| match item {
-            Item::Choice(t, ..) | Item::Entry(t, _) => indent + entry.width(t) + px(20),
-            Item::Heading(t) => indent + heading.width(t) + px(20),
+            Item::Choice(t, ..) | Item::Entry(t, ..) => indent + entry.width(t) + px(20),
+            Item::Heading(t, _) => indent + heading.width(t) + px(20),
             Item::Separator => 0,
         })
         .max()
@@ -586,27 +649,29 @@ fn menu(fonts: &Fonts, view: &View, size: &Size, button: Rect, target: &mut Targ
         targets.clear();
         // A soft shadow, then the panel.
         for i in 1..=px(4) {
-            c.shade(panel.x + i, panel.y + i, panel.w, panel.h, 0.05);
+            c.round_rect(panel.x + i, panel.y + i, panel.w, panel.h, RADIUS * sc, 0x000000, 0.05);
         }
-        c.rect(panel.x, panel.y, panel.w, panel.h, SURFACE);
-        c.outline(panel.x, panel.y, panel.w, panel.h, BORDER);
+        c.round_rect(panel.x, panel.y, panel.w, panel.h, RADIUS * sc, SURFACE, 1.0);
+        c.round_outline(panel.x, panel.y, panel.w, panel.h, RADIUS * sc, BORDER);
         let mut y = panel.y + px(6);
         for item in &items {
+            let rect = Rect { x: panel.x, y, w: panel.w, h: row };
+            let (cx, cy) = (panel.x + icon_x, y + row / 2);
             match item {
                 Item::Separator => {
                     c.rect(panel.x + px(12), y + px(4), panel.w - px(24), 1, BORDER);
                     y += px(9);
                     continue;
                 }
-                Item::Heading(t) => {
-                    c.text(&heading, panel.x + px(16), y + (row - heading.line_height()) / 2, t);
+                Item::Heading(t, icon) => {
+                    c.icon(*icon, cx, cy, sc, TEXT_SECONDARY);
+                    c.text(&heading, panel.x + indent, y + (row - heading.line_height()) / 2, t);
                 }
                 Item::Choice(t, on, action) => {
-                    let ty = y + (row - entry.line_height()) / 2;
+                    c.hover_row(rect, view.hover, sc);
                     if *on {
                         // Noto Sans has no ✓: a drawn tick, in the accent color.
-                        let (cx, cy, u) = (panel.x + px(22), y + row / 2, 4.0 * sc);
-                        let (cx, cy) = (cx as f32, cy as f32);
+                        let (cx, cy, u) = (cx as f32, cy as f32, 4.0 * sc);
                         let tick: &[(f32, f32)] = &[
                             (cx - 1.6 * u, cy - 0.1 * u),
                             (cx - 0.5 * u, cy + 1.0 * u),
@@ -617,12 +682,14 @@ fn menu(fonts: &Fonts, view: &View, size: &Size, button: Rect, target: &mut Targ
                         ];
                         c.fill(&[tick], 0.0, 0.0, 1.0, ACCENT);
                     }
-                    c.text(&entry, panel.x + indent, ty, t);
-                    targets.push((Rect { x: panel.x, y, w: panel.w, h: row }, action.clone()));
-                }
-                Item::Entry(t, action) => {
                     c.text(&entry, panel.x + indent, y + (row - entry.line_height()) / 2, t);
-                    targets.push((Rect { x: panel.x, y, w: panel.w, h: row }, action.clone()));
+                    targets.push((rect, action.clone()));
+                }
+                Item::Entry(t, icon, action) => {
+                    c.hover_row(rect, view.hover, sc);
+                    c.icon(*icon, cx, cy, sc, TEXT_SECONDARY);
+                    c.text(&entry, panel.x + indent, y + (row - entry.line_height()) / 2, t);
+                    targets.push((rect, action.clone()));
                 }
             }
             y += row;
@@ -672,8 +739,8 @@ fn about(fonts: &Fonts, view: &View, size: &Size, target: &mut Target) -> i32 {
         let x = (size.width as i32 - width) / 2;
         let top = ((size.height as i32 - height) / 2).max(px(PAD));
         c.shade(0, 0, size.width as i32, size.height as i32, 0.35);
-        c.rect(x, top, width, height, SURFACE);
-        c.outline(x, top, width, height, BORDER);
+        c.round_rect(x, top, width, height, RADIUS * sc, SURFACE, 1.0);
+        c.round_outline(x, top, width, height, RADIUS * sc, BORDER);
         let (lx, mut y) = (x + px(28), top + px(28));
         c.title(fonts, lx, y, mark_height, sc);
         y += mark_height as i32 + px(8);
@@ -690,7 +757,8 @@ fn about(fonts: &Fonts, view: &View, size: &Size, target: &mut Target) -> i32 {
         }
         y += px(22);
         let b = Rect { x: x + width - px(28) - button_w, y, w: button_w, h: button_h };
-        c.rect(b.x, b.y, b.w, b.h, ACCENT);
+        let fill = if view.hover == Some(b) { ACCENT_HOVER } else { ACCENT };
+        c.round_rect(b.x, b.y, b.w, b.h, RADIUS_SMALL * sc, fill, 1.0);
         c.text(&button_text, b.x + px(20), b.y + (b.h - button_text.line_height()) / 2, &close);
         targets.clear();
         targets.push((b, Action::CloseOverlay));
@@ -791,11 +859,48 @@ impl Canvas {
         }
     }
 
-    fn outline(&mut self, x: i32, y: i32, w: i32, h: i32, color: u32) {
-        self.rect(x, y, w, 1, color);
-        self.rect(x, y + h - 1, w, 1, color);
-        self.rect(x, y, 1, h, color);
-        self.rect(x + w - 1, y, 1, h, color);
+    /// A rectangle with corners of radius `r`, anti-aliased; an `alpha` under 1 blends it in
+    /// (the menu's shadow).
+    #[allow(clippy::too_many_arguments)]
+    fn round_rect(&mut self, x: i32, y: i32, w: i32, h: i32, r: f32, color: u32, alpha: f32) {
+        self.round_shape(x, y, w, h, r, color, |d| (0.5 - d).clamp(0.0, 1.0) * alpha);
+    }
+
+    /// The 1 px border just inside `round_rect`'s edge.
+    fn round_outline(&mut self, x: i32, y: i32, w: i32, h: i32, r: f32, color: u32) {
+        self.round_shape(x, y, w, h, r, color, |d| (1.0 - (d + 0.5).abs()).clamp(0.0, 1.0));
+    }
+
+    /// Paints each pixel of the box by its coverage, from its centre's signed distance to the
+    /// rounded edge (negative inside).
+    #[allow(clippy::too_many_arguments)]
+    fn round_shape(&mut self, x: i32, y: i32, w: i32, h: i32, r: f32, color: u32, coverage: impl Fn(f32) -> f32) {
+        let (hx, hy) = (w as f32 / 2.0, h as f32 / 2.0);
+        let (cx, cy) = (x as f32 + hx, y as f32 + hy);
+        let r = r.min(hx).min(hy);
+        for py in y.max(0)..(y + h).min(self.height as i32) {
+            for px in x.max(0)..(x + w).min(self.width as i32) {
+                let qx = (px as f32 + 0.5 - cx).abs() - (hx - r);
+                let qy = (py as f32 + 0.5 - cy).abs() - (hy - r);
+                let d = qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - r;
+                self.blend(px, py, color, coverage(d));
+            }
+        }
+    }
+
+    /// A menu row's highlight when the pointer is on it, inset from the panel's sides.
+    fn hover_row(&mut self, row: Rect, hover: Option<Rect>, sc: f32) {
+        if hover == Some(row) {
+            let (inset, gap) = ((4.0 * sc).round() as i32, (1.0 * sc).round() as i32);
+            self.round_rect(row.x + inset, row.y + gap, row.w - 2 * inset, row.h - 2 * gap, RADIUS_SMALL * sc, HOVER, 1.0);
+        }
+    }
+
+    /// A 16 × 16 icon centred on (`cx`, `cy`).
+    fn icon(&mut self, icon: Icon, cx: i32, cy: i32, sc: f32, color: u32) {
+        let shapes = icons::polygons(icon);
+        let shapes: Vec<&[(f32, f32)]> = shapes.iter().map(Vec::as_slice).collect();
+        self.fill(&shapes, cx as f32, cy as f32, sc, color);
     }
 
     /// Anti-aliased by distance from the edge.
@@ -998,6 +1103,7 @@ mod tests {
             hostname: Some("inspiron"),
             overlay: Overlay::None,
             desktop: Some(crate::desktop::State::Missing),
+            hover: None,
         }
     }
 
@@ -1116,6 +1222,46 @@ mod tests {
         assert_eq!(app.overlay, Overlay::None);
     }
 
+    #[test]
+    fn the_pointer_highlights_a_card_once() {
+        let mut app = app(Lang::En);
+        let wireless = target(app.frame(), &Action::Card(2));
+        let inside = (wireless.x + wireless.w / 2, wireless.y + 3);
+        let pixel = |app: &App| app.frame().canvas.pixels[(inside.1 as u32 * app.size().width + inside.0 as u32) as usize];
+        assert_eq!(pixel(&app), SURFACE);
+        assert_eq!(app.pointer(Some(inside)), Effect::Redraw);
+        assert_eq!(pixel(&app), CARD_HOVER);
+        // Moving within the same card draws nothing new.
+        assert_eq!(app.pointer(Some((inside.0 + 5, inside.1 + 5))), Effect::None);
+        assert_eq!(app.pointer(None), Effect::Redraw);
+        assert_eq!(pixel(&app), SURFACE);
+        // Nothing to click there.
+        assert_eq!(app.pointer(Some((0, 0))), Effect::None);
+    }
+
+    #[test]
+    fn the_chosen_card_is_not_highlighted() {
+        let mut app = app(Lang::En);
+        let wired = target(app.frame(), &Action::Card(1));
+        app.pointer(Some((wired.x + wired.w / 2, wired.y + 3)));
+        let i = ((wired.y + 3) as u32 * app.size().width + (wired.x + wired.w / 2) as u32) as usize;
+        assert_eq!(app.frame().canvas.pixels[i], SELECTED);
+    }
+
+    #[test]
+    fn the_highlight_follows_a_click_that_opens_the_menu() {
+        let mut app = app(Lang::En);
+        click_on(&mut app, &Action::Menu);
+        // The pointer is still on ☰, now a target of the open menu too.
+        assert_eq!(app.hover, Some(target(app.frame(), &Action::Menu)));
+        let about = target(app.frame(), &Action::About);
+        assert_eq!(app.pointer(Some((about.x + 10, about.y + about.h / 2))), Effect::Redraw);
+        assert_eq!(app.hover, Some(about));
+        // About opens over the spot: nothing clickable there now but the backdrop.
+        click_on(&mut app, &Action::About);
+        assert_ne!(app.hover, Some(about));
+    }
+
     /// `cargo test -- --ignored png`: the window in each language, as target/ui-*.png, with the
     /// menu and About open too.
     #[test]
@@ -1131,7 +1277,15 @@ mod tests {
                     }
                     let v = View { overlay, ..view(&cards, lang, chosen) };
                     for (scale, max, tag) in [(1.0, 768 - 120, ""), (1.5, 1080 - 120, "@1.5x")] {
-                        let frame = render(&fonts, &v, &fit(&fonts, &v, max, scale));
+                        let size = fit(&fonts, &v, max, scale);
+                        // The pointer on the other card, or on About in the menu.
+                        let under = match overlay {
+                            Overlay::None => Some(Action::Card(2)),
+                            Overlay::Menu => Some(Action::About),
+                            Overlay::About => None,
+                        };
+                        let hover = under.map(|a| target(&render(&fonts, &v, &size), &a));
+                        let frame = render(&fonts, &View { hover, ..v }, &size);
                         let path = format!("target/ui-{}-{}{suffix}{tag}.png", lang.tag(), cards[chosen].name);
                         std::fs::write(&path, encode_png(&frame.canvas)).unwrap();
                     }

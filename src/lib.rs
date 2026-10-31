@@ -5,6 +5,7 @@
 mod desktop;
 mod gui;
 mod i18n;
+mod icons;
 mod link;
 mod net;
 mod open;

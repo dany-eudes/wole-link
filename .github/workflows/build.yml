@@ -19,7 +19,7 @@ jobs:
       matrix:
         target: [x86_64-unknown-linux-musl, aarch64-unknown-linux-musl]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -37,7 +37,7 @@ jobs:
         run: |
           file target/${{ matrix.target }}/release/wole-link
           file target/${{ matrix.target }}/release/wole-link | grep -q "statically linked"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}
           path: target/${{ matrix.target }}/release/wole-link
@@ -46,7 +46,7 @@ jobs:
   windows:
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: Test
         run: cargo test
@@ -59,7 +59,7 @@ jobs:
           dumpbin=$(find "/c/Program Files/Microsoft Visual Studio" -name dumpbin.exe -path "*Hostx64/x64*" | head -1)
           "$dumpbin" //dependents target/x86_64-pc-windows-msvc/release/wole-link.exe | tee deps.txt
           ! grep -iE "vcruntime|msvcp|api-ms-win-crt" deps.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: x86_64-pc-windows-msvc
           path: target/x86_64-pc-windows-msvc/release/wole-link.exe
@@ -72,7 +72,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           path: artifacts
       - name: Name the files

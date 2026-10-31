@@ -1,0 +1,3 @@
+# The release .exe must run on a bare Windows: the C runtime goes inside it, no VC++ redistributable.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

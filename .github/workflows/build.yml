@@ -1,0 +1,100 @@
+# Tests and builds on every push; on a v* tag, a draft release with the three files, their
+# SHA-256 sums and, once the MINISIGN_KEY secret exists, a minisign signature of the sums.
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        target: [x86_64-unknown-linux-musl, aarch64-unknown-linux-musl]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      # Zig links static musl binaries for both architectures from the same x86_64 runner.
+      - uses: mlugg/setup-zig@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+      - name: Test
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: cargo test
+      - name: Build
+        run: cargo zigbuild --release --target ${{ matrix.target }}
+      - name: Check it's static
+        run: |
+          file target/${{ matrix.target }}/release/wole-link
+          file target/${{ matrix.target }}/release/wole-link | grep -q "statically linked"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/wole-link
+          if-no-files-found: error
+
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test
+        run: cargo test
+      - name: Build
+        run: cargo build --release --target x86_64-pc-windows-msvc
+      # Only system DLLs: no VC++ runtime to install (static CRT, .cargo/config.toml).
+      - name: Check its DLLs
+        shell: bash
+        run: |
+          dumpbin=$(find "/c/Program Files/Microsoft Visual Studio" -name dumpbin.exe -path "*Hostx64/x64*" | head -1)
+          "$dumpbin" //dependents target/x86_64-pc-windows-msvc/release/wole-link.exe | tee deps.txt
+          ! grep -iE "vcruntime|msvcp|api-ms-win-crt" deps.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: x86_64-pc-windows-msvc
+          path: target/x86_64-pc-windows-msvc/release/wole-link.exe
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, windows]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Name the files
+        run: |
+          v=${GITHUB_REF_NAME#v}
+          mkdir dist
+          cp artifacts/x86_64-pc-windows-msvc/wole-link.exe "dist/wole-link-$v-windows-x86_64.exe"
+          cp artifacts/x86_64-unknown-linux-musl/wole-link "dist/wole-link-$v-linux-x86_64"
+          cp artifacts/aarch64-unknown-linux-musl/wole-link "dist/wole-link-$v-linux-arm64"
+          chmod +x dist/wole-link-*-linux-*
+          cd dist && sha256sum wole-link-* > SHA256SUMS && cat SHA256SUMS
+      - name: Sign the sums
+        env:
+          MINISIGN_KEY: ${{ secrets.MINISIGN_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        if: env.MINISIGN_KEY != ''
+        run: |
+          sudo apt-get install -y minisign
+          printf '%s\n' "$MINISIGN_KEY" > key.txt
+          printf '%s\n' "$MINISIGN_PASSWORD" | minisign -S -s key.txt -m dist/SHA256SUMS
+          rm key.txt
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --draft --title "WOL•E Link $GITHUB_REF_NAME" --generate-notes

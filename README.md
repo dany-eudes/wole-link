@@ -64,6 +64,23 @@ https://wole.celerasoft.com/add#v=1&mac=AA-BB-CC-DD-EE-FF&ip=192.168.0.20&bc=192
   for them.
 - Readers ignore keys they don't know, so later versions can add fields.
 
+## Checking a download
+
+Each release has `SHA256SUMS` and its [minisign](https://jedisct1.github.io/minisign/)
+signature, `SHA256SUMS.minisig`. The public key:
+
+```
+RWRFM/lCBXDabL4fkMuiqfVcYEZxApAOgje+fpObZbcMwOmM0Tr5VRm7
+```
+
+```
+minisign -Vm SHA256SUMS -P RWRFM/lCBXDabL4fkMuiqfVcYEZxApAOgje+fpObZbcMwOmM0Tr5VRm7
+sha256sum -c --ignore-missing SHA256SUMS
+```
+
+The first line proves the list of files comes from the author; the second, that the files you
+downloaded are the ones on the list.
+
 ## Building
 
 Everything runs in Docker; nothing to install on the host besides Docker and `make`.

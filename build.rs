@@ -1,6 +1,6 @@
 //! Windows: puts the icon and the version information (what Explorer shows under Properties →
-//! Details) into the .exe: MinGW's windres for the local test builds, the Windows SDK's rc.exe for
-//! the MSVC release build in CI.
+//! Details) into each .exe, `wole-link` and `wole-link-cli`: MinGW's windres for the local test
+//! builds, the Windows SDK's rc.exe for the MSVC release build in CI.
 
 use std::env;
 use std::path::PathBuf;
@@ -11,12 +11,18 @@ fn main() {
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
     }
+    resource("wole-link", "WOL•E Link");
+    resource("wole-link-cli", "WOL•E Link (command line)");
+}
+
+/// Compiles the icon and version information of the program `bin` and links them into it only.
+fn resource(bin: &str, description: &str) {
     let version = env::var("CARGO_PKG_VERSION").unwrap();
     let numbers: Vec<&str> = version.split(['.', '-']).take(3).collect();
     let comma = format!("{},0", numbers.join(","));
     let icon = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("assets/icon/wole-link.ico");
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
-    let rc = out.join("wole-link.rc");
+    let rc = out.join(format!("{bin}.rc"));
     std::fs::write(
         &rc,
         format!(
@@ -33,11 +39,11 @@ BEGIN
     BLOCK "040904B0"
     BEGIN
       VALUE "CompanyName", "@celeraman"
-      VALUE "FileDescription", "WOL•E Link"
+      VALUE "FileDescription", "{description}"
       VALUE "FileVersion", "{version}"
-      VALUE "InternalName", "wole-link"
+      VALUE "InternalName", "{bin}"
       VALUE "LegalCopyright", "© 2026 @celeraman. MIT License."
-      VALUE "OriginalFilename", "wole-link.exe"
+      VALUE "OriginalFilename", "{bin}.exe"
       VALUE "ProductName", "WOL•E Link"
       VALUE "ProductVersion", "{version}"
     END
@@ -56,7 +62,7 @@ END
     if env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("gnu") {
         let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
         let windres = format!("{}-w64-mingw32-windres", if arch == "x86" { "i686" } else { "x86_64" });
-        let object = out.join("wole-link-res.o");
+        let object = out.join(format!("{bin}-res.o"));
         let status = Command::new(&windres)
             .args(["--input-format=rc", "--output-format=coff", "-c", "65001"])
             .arg(&rc)
@@ -64,12 +70,12 @@ END
             .status()
             .unwrap_or_else(|e| panic!("{windres}: {e}"));
         assert!(status.success(), "{windres} failed");
-        println!("cargo:rustc-link-arg-bins={}", object.display());
+        println!("cargo:rustc-link-arg-bin={bin}={}", object.display());
     } else {
         // MSVC (the release build in CI): rc.exe from the Windows SDK, which isn't on PATH
         // outside a Developer Command Prompt.
         let rc_exe = find_rc().expect("rc.exe not found: install the Windows SDK or set RC");
-        let res = out.join("wole-link.res");
+        let res = out.join(format!("{bin}.res"));
         let status = Command::new(&rc_exe)
             .args(["/nologo", "/fo"])
             .arg(&res)
@@ -77,7 +83,7 @@ END
             .status()
             .unwrap_or_else(|e| panic!("{}: {e}", rc_exe.display()));
         assert!(status.success(), "rc.exe failed");
-        println!("cargo:rustc-link-arg-bins={}", res.display());
+        println!("cargo:rustc-link-arg-bin={bin}={}", res.display());
     }
 }
 

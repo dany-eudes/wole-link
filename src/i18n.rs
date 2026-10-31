@@ -102,7 +102,10 @@ pub enum Msg<'a> {
     AboutLicense,
     AboutFont,
     Close,
-    Usage,
+    /// The options, under the program's name.
+    Usage(&'a str),
+    /// Windows, in the window program's help: use the console program in a terminal.
+    UseCli,
 }
 
 pub fn text(lang: Lang, msg: Msg) -> String {
@@ -310,27 +313,41 @@ pub fn text(lang: Lang, msg: Msg) -> String {
             Es => "Cerrar",
         }
         .into(),
-        Usage => match lang {
-            En => "Usage: wole-link [--card NAME] [--text] [--list] [--lang en|pt-BR|pt-PT|es]\n\
-                   \n  --card NAME  use this network card instead of the suggested one\
-                   \n  --text       QR in the terminal, without a window\
-                   \n  --list       list every network card, virtual ones included\
-                   \n  --lang       language of the messages",
-            PtBr => "Uso: wole-link [--card NOME] [--text] [--list] [--lang en|pt-BR|pt-PT|es]\n\
-                     \n  --card NOME  usa esta placa de rede em vez da sugerida\
-                     \n  --text       QR no terminal, sem janela\
-                     \n  --list       lista todas as placas de rede, também as virtuais\
-                     \n  --lang       idioma das mensagens",
-            PtPt => "Utilização: wole-link [--card NOME] [--text] [--list] [--lang en|pt-BR|pt-PT|es]\n\
-                     \n  --card NOME  usa esta placa de rede em vez da sugerida\
-                     \n  --text       QR no terminal, sem janela\
-                     \n  --list       lista todas as placas de rede, também as virtuais\
-                     \n  --lang       idioma das mensagens",
-            Es => "Uso: wole-link [--card NOMBRE] [--text] [--list] [--lang en|pt-BR|pt-PT|es]\n\
-                   \n  --card NOMBRE  usa esta tarjeta de red en lugar de la sugerida\
-                   \n  --text         QR en la terminal, sin ventana\
-                   \n  --list         lista todas las tarjetas de red, también las virtuales\
-                   \n  --lang         idioma de los mensajes",
+        Usage(prog) => match lang {
+            En => format!(
+                "Usage: {prog} [--card NAME] [--text] [--list] [--lang en|pt-BR|pt-PT|es]\n\
+                 \n  --card NAME  use this network card instead of the suggested one\
+                 \n  --text       QR in the terminal, without a window\
+                 \n  --list       list every network card, virtual ones included\
+                 \n  --lang       language of the messages"
+            ),
+            PtBr => format!(
+                "Uso: {prog} [--card NOME] [--text] [--list] [--lang en|pt-BR|pt-PT|es]\n\
+                 \n  --card NOME  usa esta placa de rede em vez da sugerida\
+                 \n  --text       QR no terminal, sem janela\
+                 \n  --list       lista todas as placas de rede, também as virtuais\
+                 \n  --lang       idioma das mensagens"
+            ),
+            PtPt => format!(
+                "Utilização: {prog} [--card NOME] [--text] [--list] [--lang en|pt-BR|pt-PT|es]\n\
+                 \n  --card NOME  usa esta placa de rede em vez da sugerida\
+                 \n  --text       QR no terminal, sem janela\
+                 \n  --list       lista todas as placas de rede, também as virtuais\
+                 \n  --lang       idioma das mensagens"
+            ),
+            Es => format!(
+                "Uso: {prog} [--card NOMBRE] [--text] [--list] [--lang en|pt-BR|pt-PT|es]\n\
+                 \n  --card NOMBRE  usa esta tarjeta de red en lugar de la sugerida\
+                 \n  --text         QR en la terminal, sin ventana\
+                 \n  --list         lista todas las tarjetas de red, también las virtuales\
+                 \n  --lang         idioma de los mensajes"
+            ),
+        },
+        UseCli => match lang {
+            En => "In cmd or PowerShell, use wole-link-cli.exe: the prompt waits for it and > saves to a file.",
+            PtBr => "No cmd ou no PowerShell, use o wole-link-cli.exe: o prompt espera por ele e o > grava em arquivo.",
+            PtPt => "No cmd ou no PowerShell, use o wole-link-cli.exe: a linha de comandos espera por ele e o > grava num ficheiro.",
+            Es => "En cmd o PowerShell, usa wole-link-cli.exe: el prompt lo espera y > guarda en un archivo.",
         }
         .into(),
     }

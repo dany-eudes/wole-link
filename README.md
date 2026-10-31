@@ -40,9 +40,17 @@ wole-link --list          # every card, virtual ones included
 wole-link --lang pt-BR    # en, pt-BR, pt-PT or es; default: the system's language
 ```
 
-On Windows, `wole-link.exe` is a window program: a double click opens only the window. Started
-from `cmd` or PowerShell with `--text` or `--list`, it writes to that console, but the prompt
-comes back before the output (Windows doesn't wait for window programs).
+On Windows there are two programs, built from the same code:
+
+- `wole-link.exe`, a window program: a double click opens only the window, with no console
+  flashing up. Started from `cmd` or PowerShell with `--text` or `--list` it still writes to that
+  console, but the prompt comes back before the output (Windows doesn't wait for window
+  programs), and in PowerShell `> file.txt` stays empty.
+- `wole-link-cli.exe`, a console program for the terminal: the QR (or `--list`) in the console,
+  never the window. The prompt waits for it and `>` works, in PowerShell too.
+
+On Linux, `wole-link` does both: the window when there's a display, the terminal with `--text`,
+`--list` or without a display.
 
 ## Link format (v1)
 
@@ -88,7 +96,7 @@ Everything runs in Docker; nothing to install on the host besides Docker and `ma
 ```
 make test      # unit tests
 make linux     # target/x86_64-unknown-linux-musl/release/wole-link (static)
-make windows   # target/x86_64-pc-windows-gnu/release/wole-link.exe (for testing in a VM)
+make windows   # target/x86_64-pc-windows-gnu/release/wole-link.exe and wole-link-cli.exe (VM tests)
 make windows32 # 32-bit build, only for testing on a 32-bit VM (Windows 10 or later)
 make png       # the window in each language, as target/ui-*.png
 ```

@@ -6,6 +6,11 @@ license = "MIT"
 description = "Shows a QR code that registers this computer in the WOL•E Wake-on-LAN app"
 publish = false
 
+# Not `wole_link`: a library and a program with the same name collide in their .pdb on Windows.
+[lib]
+name = "wole_link_app"
+path = "src/lib.rs"
+
 [dependencies]
 fontdue = { version = "0.9.5", default-features = false }
 qrcodegen = "1.8.0"

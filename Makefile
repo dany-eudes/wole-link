@@ -8,14 +8,15 @@ test:
 linux:
 	$(RUN) cargo build --release --target x86_64-unknown-linux-musl
 
-## Windows binary for the test VM: target/x86_64-pc-windows-gnu/release/wole-link.exe
+## Windows binaries for the test VM: target/x86_64-pc-windows-gnu/release/wole-link.exe (window)
+## and wole-link-cli.exe (terminal)
 windows:
 	$(RUN) cargo build --release --target x86_64-pc-windows-gnu
 
 .PHONY: test linux windows windows32 png
 
 ## 32-bit Windows binary, only for testing on a 32-bit VM:
-## target/i686-pc-windows-gnu/release/wole-link.exe
+## target/i686-pc-windows-gnu/release/wole-link.exe and wole-link-cli.exe
 windows32:
 	$(RUN) cargo build --release --target i686-pc-windows-gnu
 

@@ -975,7 +975,7 @@ mod tests {
                 Msg::LabelPort, Msg::MenuLanguage, Msg::MenuAbout, Msg::MenuSite, Msg::MenuPlay,
                 Msg::MenuCoffee, Msg::MenuContact, Msg::MenuAddEntry, Msg::MenuRemoveEntry,
                 Msg::MenuUpdateEntry, Msg::AboutVersion("1.0"), Msg::AboutText, Msg::AboutLicense,
-                Msg::AboutFont, Msg::Close, Msg::Usage,
+                Msg::AboutFont, Msg::Close, Msg::Usage("wole-link"), Msg::UseCli,
             ];
             let mut chars: String = all.into_iter().map(|m| text(lang, m)).collect();
             chars += TITLE;

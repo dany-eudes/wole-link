@@ -1,6 +1,6 @@
 [package]
 name = "wole-link"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
 description = "Shows a QR code that registers this computer in the WOL•E Wake-on-LAN app"

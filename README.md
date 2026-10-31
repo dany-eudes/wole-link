@@ -4,7 +4,7 @@ Portable, open-source utility that finds your computer's wired network card and 
 to register it in WOL•E, the Wake-on-LAN app for Android. Single file, nothing to install, for
 Windows and Linux.
 
-> Work in progress. The display name and the visual identity are not final yet.
+Download page: https://wole.celerasoft.com/wole-link.html · [Code signing policy](#code-signing-policy)
 
 ## What it does
 
@@ -52,6 +52,16 @@ On Windows there are two programs, built from the same code:
 On Linux, `wole-link` does both: the window when there's a display, the terminal with `--text`,
 `--list` or without a display.
 
+## Removing it
+
+There is nothing to uninstall: delete the program file. WOL•E Link changes nothing on the system
+except two things, both under your user account:
+
+- the language you pick in the ☰ menu, in `%APPDATA%\wole-link\settings.ini` (Windows) or
+  `~/.config/wole-link/settings.ini` (Linux); delete the `wole-link` folder to remove it;
+- on Linux, only if you choose "Add to the applications menu", `wole-link.desktop` and its icons
+  under `~/.local/share`; "Remove from the applications menu", in the same menu, deletes them.
+
 ## Link format (v1)
 
 ```
@@ -89,6 +99,27 @@ sha256sum -c --ignore-missing SHA256SUMS
 The first line proves the list of files comes from the author; the second, that the files you
 downloaded are the ones on the list.
 
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by
+[SignPath Foundation](https://signpath.org/).
+
+The Windows programs (`wole-link.exe` and `wole-link-cli.exe`) are signed from the first signed
+release on; Windows shows "SignPath Foundation" as the publisher. Every signed file is built by
+GitHub Actions, on GitHub's own runners, from the source code of a release tag in this
+repository ([build.yml](.github/workflows/build.yml)); nothing built elsewhere is signed, and
+each signing request is approved by hand.
+
+Team roles:
+
+- Committers and reviewers: [Dany Eudes](https://github.com/dany-eudes)
+- Approvers: [Dany Eudes](https://github.com/dany-eudes)
+
+Privacy policy: this program will not transfer any information to other networked systems unless
+specifically requested by the user or the person installing or operating it. It reads the
+network cards and the computer's name only to draw the QR code on the screen; the menu's links
+open in the browser only when you click them.
+
 ## Building
 
 Everything runs in Docker; nothing to install on the host besides Docker and `make`.
@@ -109,5 +140,10 @@ Windows `.ico` and the X11 icon in `assets/icon/`.
 
 ## License
 
-[MIT](LICENSE), © 2026 @celeraman. The embedded font is Noto Sans, subset to the Latin characters the four
-languages use, under the [SIL Open Font License 1.1](assets/fonts/OFL.txt).
+[MIT](LICENSE), © 2026 @celeraman: the code and everything in this repository, the icon included.
+The embedded font is Noto Sans, subset to the Latin characters the four languages use, under the
+[SIL Open Font License 1.1](assets/fonts/OFL.txt).
+
+"WOL•E", "WOL•E Link" and the WOL•E logo are the author's trademarks. The MIT License covers the
+code and the files, not the names: a modified version must not be distributed under these names
+or with this icon in a way that suggests it is the original.

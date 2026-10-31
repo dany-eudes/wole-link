@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Copy of the artifact configuration set up in SignPath for this project. The CI uploads the two
+     Windows programs as one GitHub artifact (a zip with both at its root) and passes the release
+     version as the "version" parameter; SignPath signs only files whose metadata matches. -->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <parameter name="version" required="true" />
+  </parameters>
+  <zip-file>
+    <pe-file path="wole-link.exe" product-name="WOL•E Link" product-version="${version}">
+      <authenticode-sign />
+    </pe-file>
+    <pe-file path="wole-link-cli.exe" product-name="WOL•E Link" product-version="${version}">
+      <authenticode-sign />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>
